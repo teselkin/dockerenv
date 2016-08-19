@@ -1,0 +1,150 @@
+#!/bin/bash
+
+set -o errexit
+#set -o xtrace
+
+
+if [ -f "${HOME}/.dockerenvrc" ]; then
+  source "${HOME}/.dockerenvrc"
+fi
+
+
+say() {
+  echo "$@"
+}
+
+die() {
+  cat << EOF
+FAILED
+****************************************
+$@
+****************************************
+EOF
+  exit 1
+}
+
+
+if [ -z "${BASE_DIR}" ]; then
+  BASE_DIR=$(readlink -f $0)
+  BASE_DIR=${BASE_DIR%/*}
+fi
+
+TEMPLATES_DIR=${BASE_DIR}/templates
+INCLUDE_DIR=${BASE_DIR}/include
+
+
+force=false
+no_cache=false
+rebuild=false
+simulate=false
+template='ubuntu:latest'
+workspace=$PWD
+env_cmd='bash'
+
+
+while [ -n "$1" ]; do
+  case $1 in
+    -f|--force)
+      force=true
+      shift
+    ;;
+    -N|--no-cache)
+      no_cache=true
+      shift
+    ;;
+    -R|--rebuild)
+      rebuild=true
+      no_cache=true
+      shift
+    ;;
+    -s|--simulate)
+      simulate=true
+      shift
+    ;;
+    -t|--template)
+      template=$2
+      shift 2
+    ;;
+    -w|--workspace)
+      workspace=$2
+      shift 2
+    ;;
+    *)
+      env_cmd="$@"
+      shift $#
+    ;;
+  esac
+done
+
+
+build_opts=''
+if ${no_cache}; then
+  build_opts+='  --no-cache'
+fi
+
+
+if [ -d "${TEMPLATES_DIR}/${template}" ]; then
+  image=${template}:latest
+
+  do_build=false
+  if [ -z "$(docker images --quiet ${image})" ]; then
+    say "Image '${image}' not found"
+    do_build=true
+  fi
+
+  if $rebuild; then
+    do_build=true
+  fi
+
+  if $do_build; then
+    pushd ${TEMPLATES_DIR}/${template}
+    say "Building new image '${image}'"
+    if [ -f "Dockerfile.m4" ]; then
+      say "Dockerfile.m4 found, running preprocessor ..."
+      m4 \
+        --fatal-warnings \
+        --include=${INCLUDE_DIR} \
+        Dockerfile.m4 | tee Dockerfile.tmp > /dev/null
+      if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        die "m4 failed"
+      else
+        mv Dockerfile.tmp Dockerfile
+      fi
+    fi
+    tmpdir=$(mktemp -d --tmpdir=.)
+    mkdir ${tmpdir}/etc
+    cp /etc/passwd ${tmpdir}/etc
+    cp /etc/group ${tmpdir}/etc
+    cmd="docker build \
+      --rm \
+      --build-arg tmpdir=${tmpdir} \
+      --build-arg username=${USER} \
+      --tag ${image} \
+      ${build_opts} ."
+
+    if $simulate; then
+      echo "${cmd}"
+    else
+      eval "${cmd}"
+    fi
+    rm -rf ${tmpdir}
+    popd
+  fi
+else
+  image=${template}
+fi
+
+
+cmd="docker run \
+  --interactive \
+  --tty \
+  --volume ${workspace}:/workspace:rw \
+  --user $(id -u):$(id -g) \
+  ${image} ${env_cmd}"
+
+if $simulate; then
+  echo "${cmd}"
+else
+  eval "${cmd}"
+fi
+

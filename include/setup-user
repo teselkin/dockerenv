@@ -1,0 +1,5 @@
+ADD ${tmpdir}/etc/passwd /etc/
+ADD ${tmpdir}/etc/group /etc/
+RUN echo "${username} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/${username}
+RUN chmod 440 /etc/sudoers.d/${username}
+RUN /sbin/mkhomedir_helper ${username}
