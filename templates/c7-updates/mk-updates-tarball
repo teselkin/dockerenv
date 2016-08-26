@@ -1,8 +1,12 @@
 #!/bin/bash
 
 set -o errexit
+
+exec 4>/tmp/xtrace.log
+export BASH_XTRACEFD=4
 set -o xtrace
-exec &> >(tee -a "/tmp/debug.log")
+
+exec &> >(tee -a /tmp/debug.log)
 
 
 from_file=''
