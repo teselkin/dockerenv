@@ -23,6 +23,16 @@ EOF
   exit 1
 }
 
+call() {
+  if $simulate; then
+    say "$@"
+  else
+#    say "Running command:"
+#    say "$@"
+    eval "$@"
+  fi
+}
+
 
 if [ -z "${BASE_DIR}" ]; then
   BASE_DIR=$(readlink -f $0)
@@ -115,18 +125,13 @@ if [ -d "${TEMPLATES_DIR}/${template}" ]; then
     mkdir ${tmpdir}/etc
     cp /etc/passwd ${tmpdir}/etc
     cp /etc/group ${tmpdir}/etc
-    cmd="docker build \
+    call docker build \
       --rm \
       --build-arg tmpdir=${tmpdir} \
       --build-arg username=${USER} \
       --tag ${image} \
-      ${build_opts} ."
+      ${build_opts} .
 
-    if $simulate; then
-      echo "${cmd}"
-    else
-      eval "${cmd}"
-    fi
     rm -rf ${tmpdir}
     popd
   fi
@@ -135,16 +140,33 @@ else
 fi
 
 
-cmd="docker run \
+cidfile=$(mktemp)
+if [ -f "${cidfile}" ]; then
+  rm -f ${cidfile}
+else
+  die "Unable to create cidfile ${cidfile}"
+fi
+
+call docker create \
+  --cidfile=${cidfile} \
   --interactive \
   --tty \
+  --privileged \
   --volume ${workspace}:/workspace:rw \
+  --volume ${HOME}/.ssh:${HOME}/.ssh:ro \
+  --volume /tmp:/tmp:rw \
   --user $(id -u):$(id -g) \
-  ${image} ${env_cmd}"
+  ${image} ${env_cmd}
 
-if $simulate; then
-  echo "${cmd}"
+if [ -f "${cidfile}" ]; then
+  cid=$(cat ${cidfile})
 else
-  eval "${cmd}"
+  die "cidfile '${cidfile}' not found after 'docker create'"
 fi
+
+call docker start ${cid}
+
+call docker attach ${cid}
+
+call docker rm ${cid}
 
