@@ -2,7 +2,7 @@
 
 set -o errexit
 set -o xtrace
-exec &> >(tee -a "/workspace/debug.log")
+exec &> >(tee -a "/tmp/debug.log")
 
 
 from_file=''
@@ -30,7 +30,7 @@ mkdir -p ${tmpdir}/Packages
 
 if [ -f "${from_file}" ]; then
   {
-    awk '{for(i=1;i<=NF;i++){if($i~/\.rpm/){print $i}}}' ${from_file}
+    awk '{for(i=1;i<=NF;i++){if($i~/\.rpm$/){print $i}}}' ${from_file}
   } | while read name; do
     pkg=${name%%.rpm}
     sudo yumdownloader --destdir ${tmpdir}/Packages ${pkg}
