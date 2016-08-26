@@ -203,6 +203,7 @@ if $update; then
     cp -r ${update_scripts} ${tmpdir}/tmp/hooks/
 
     call docker exec \
+      --tty \
       --privileged \
       ${cid} \
       /bin/bash /tmp/hooks/update/run.sh
