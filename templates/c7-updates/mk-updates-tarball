@@ -1,0 +1,48 @@
+#!/bin/bash
+
+set -o errexit
+set -o xtrace
+exec &> >(tee -a "/workspace/debug.log")
+
+
+from_file=''
+from_list=''
+
+while [ -n "$1" ]; do
+  case "$1" in
+    -f|--from-file)
+      from_file="$2"
+      shift 2
+    ;;
+    *)
+      from_list="${from_list} $2"
+      shift
+    ;;
+  esac
+done
+
+tmpdir=$(mktemp -d)
+
+echo "Tempdir ${tmpdir}"
+
+sudo yum-config-manager --enable base-debug-info
+mkdir -p ${tmpdir}/Packages
+
+if [ -f "${from_file}" ]; then
+  {
+    awk '{for(i=1;i<=NF;i++){if($i~/\.rpm/){print $i}}}' ${from_file}
+  } | while read name; do
+    pkg=${name%%.rpm}
+    sudo yumdownloader --destdir ${tmpdir}/Packages ${pkg}
+  done
+fi
+
+if [ -n "${from_list}" ]; then
+  sudo yumdownloader --destdir ${tmpdir}/Packages ${from_list}
+fi
+
+pushd ${tmpdir}/Packages
+createrepo .
+tar -czvf /workspace/updates.tar.gz .
+popd
+
