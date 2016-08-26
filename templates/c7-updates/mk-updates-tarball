@@ -70,7 +70,7 @@ if [ -n "${from_list}" ]; then
   sudo yumdownloader --destdir ${tmpdir}/Packages ${from_list}
 fi
 
-pushd ${tmpdir}/Packages
+pushd ${tmpdir}
 createrepo .
 tar -czvf /workspace/updates.tar.gz .
 popd
