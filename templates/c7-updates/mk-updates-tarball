@@ -8,12 +8,37 @@ set -o xtrace
 
 exec &> >(tee -a /tmp/debug.log)
 
+usage(){
+  cat << EOF
+
+mk-updates-tarball
+
+  Script to download rpm packages, create repository and compress into tar.gz file.
+  Packages names can be stored in a file or passed as command line arguments.
+
+  The script generates two log files in /tmp directory - xtrace.log and debug.log.
+
+  Resulting tarball named updates.tar.gz will be copied to /workspace directory.
+
+Usage:
+
+  mk-updates-tarball [-h] [-f <filename>] [package [package]]
+
+  -h|--help      - show this message and exit
+  -f|--from-file - download packages listed in a file
+
+EOF
+}
 
 from_file=''
 from_list=''
 
 while [ -n "$1" ]; do
   case "$1" in
+    -h|--help)
+      usage
+      exit 0
+    ;;
     -f|--from-file)
       from_file="$2"
       shift 2
