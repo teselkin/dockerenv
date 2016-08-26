@@ -27,8 +27,8 @@ call() {
   if $simulate; then
     say "$@"
   else
-#    say "Running command:"
-#    say "$@"
+    say "Running command:"
+    say "$@"
     eval "$@"
   fi
 }
@@ -78,6 +78,10 @@ while [ -n "$1" ]; do
     -w|--workspace)
       workspace=$2
       shift 2
+    ;;
+    -W|--no-workspace)
+      workspace=''
+      shift
     ;;
     *)
       env_cmd="$@"
@@ -147,6 +151,16 @@ else
   die "Unable to create cidfile ${cidfile}"
 fi
 
+tmpdir=$(mktemp -d /tmp/dockerenv.${image//:/-}.XXXXXXXX)
+say "Temp mount point is at '${tmpdir}'"
+
+mkdir -p ${tmpdir}/tmp
+
+if [ -z "${workspace}" ]; then
+  workspace=${tmpdir}/workspace
+  mkdir -p ${workspace}
+fi
+
 call docker create \
   --cidfile=${cidfile} \
   --interactive \
@@ -154,7 +168,7 @@ call docker create \
   --privileged \
   --volume ${workspace}:/workspace:rw \
   --volume ${HOME}/.ssh:${HOME}/.ssh:ro \
-  --volume /tmp:/tmp:rw \
+  --volume ${tmpdir}/tmp:/tmp:rw \
   --user $(id -u):$(id -g) \
   ${image} ${env_cmd}
 
