@@ -47,6 +47,8 @@ force=false
 no_cache=false
 rebuild=false
 simulate=false
+update=false
+update_only=false
 template='ubuntu:latest'
 workspace=$PWD
 env_cmd='bash'
@@ -74,6 +76,15 @@ while [ -n "$1" ]; do
     -t|--template)
       template=$2
       shift 2
+    ;;
+    -u|--update)
+      update=true
+      shift
+    ;;
+    -U|--update-only)
+      update=true
+      update_only=true
+      shift
     ;;
     -w|--workspace)
       workspace=$2
@@ -161,6 +172,8 @@ if [ -z "${workspace}" ]; then
   mkdir -p ${workspace}
 fi
 
+
+# Create and start new container
 call docker create \
   --cidfile=${cidfile} \
   --interactive \
@@ -180,7 +193,36 @@ fi
 
 call docker start ${cid}
 
-call docker attach ${cid}
 
+# Update container and commit
+if $update; then
+  say "Updating container before attaching session"
+  update_scripts=${TEMPLATES_DIR}/${template}/hooks/update
+  if [ -d "${update_scripts}" ]; then
+    mkdir -p ${tmpdir}/tmp/hooks
+    cp -r ${update_scripts} ${tmpdir}/tmp/hooks/
+
+    call docker exec \
+      --privileged \
+      ${cid} \
+      /bin/bash /tmp/hooks/update/run.sh
+
+    call docker commit \
+      ${cid} \
+      ${image}
+
+    if $update_only; then
+      call docker stop ${cid}
+      call docker rm ${cid}
+      exit 0
+    fi
+  else
+    say "Update scripts not found, skipping update"
+  fi
+fi
+
+
+# Attach session, remove container before exiting the script
+call docker attach ${cid}
 call docker rm ${cid}
 
