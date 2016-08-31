@@ -1,0 +1,88 @@
+#!/bin/bash
+
+set -o errexit
+
+exec 4>/tmp/xtrace.log
+export BASH_XTRACEFD=4
+set -o xtrace
+
+exec &> >(tee -a /tmp/debug.log)
+
+usage(){
+  cat << EOF
+
+mk-updates-tarball
+
+  Script to download rpm packages, create repository and compress into tar.gz file.
+  Packages names can be stored in a file or passed as command line arguments.
+
+  The script generates two log files in /tmp directory - xtrace.log and debug.log.
+
+  Resulting tarball named updates.tar.gz will be copied to /workspace directory.
+
+Usage:
+
+  mk-updates-tarball [-h] [-f <filename>] [package [package]]
+
+  -h|--help      - show this message and exit
+  -f|--from-file - download packages listed in a file
+
+EOF
+}
+
+from_file=''
+from_list=''
+
+while [ -n "$1" ]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+    ;;
+    -f|--from-file)
+      from_file="$2"
+      shift 2
+    ;;
+    *)
+      from_list="${from_list} $2"
+      shift
+    ;;
+  esac
+done
+
+tmpdir=$(mktemp -d)
+
+echo "Tempdir ${tmpdir}"
+
+sudo yum-config-manager --enable base-debuginfo
+sudo yum makecache
+
+mkdir -p ${tmpdir}/Packages
+
+if [ -f "${from_file}" ]; then
+  {
+    awk '{for(i=1;i<=NF;i++){if($i~/\.rpm$/){print $i}}}' ${from_file}
+  } | while read name; do
+    pkg=${name%%.rpm}
+    sudo yumdownloader --enablerepo base --enablerepo updates \
+      --destdir ${tmpdir}/Packages ${pkg}
+  done
+fi
+
+if [ -n "${from_list}" ]; then
+  sudo yumdownloader --enablerepo base --enablerepo updates \
+    --destdir ${tmpdir}/Packages ${from_list}
+fi
+
+pushd ${tmpdir}
+createrepo .
+tar -czvf /workspace/updates.tar.gz .
+popd
+
+cat << EOF | sudo tee /etc/yum.repos.d/local.repo
+[local]
+name=Local Repo
+baseurl=file://${tmpdir}
+enabled=1
+gpgcheck=0
+EOF

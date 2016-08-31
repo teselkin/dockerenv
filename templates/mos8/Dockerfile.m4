@@ -21,6 +21,9 @@ RUN yum-config-manager --enable mos-os --enable mos-updates --enable mos-propose
 RUN yum update -y
 #RUN yum -C erase fakesystemd -y
 
+ADD mk-updates-tarball /usr/local/sbin/
+RUN chmod +x /usr/local/sbin/mk-updates-tarball
+
 include(`setup-user')
 
 WORKDIR /workspace
