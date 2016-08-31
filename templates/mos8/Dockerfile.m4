@@ -9,7 +9,7 @@ RUN yum install -y \
   createrepo
 
 RUN rm -f /etc/yum.repos.d/CentOS-Vault.repo
-RUN echo 7.1.1503 > /etc/yum/vars/releasever
+RUN echo 7.1.1503 > /etc/yum/vars/vaultver
 
 ADD CentOS-Vault.repo /etc/yum.repos.d/
 ADD mos.repo /etc/yum.repos.d/

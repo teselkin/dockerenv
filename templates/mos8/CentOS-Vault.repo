@@ -2,36 +2,36 @@
 # tree.
 
 [vault-base]
-name=CentOS-$releasever - Base
-baseurl=http://vault.centos.org/$releasever/os/$basearch/
+name=CentOS-$vaultver - Base
+baseurl=http://vault.centos.org/$vaultver/os/$basearch/
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
 enabled=0
 
 [vault-updates]
-name=CentOS-$releasever - Updates
-baseurl=http://vault.centos.org/$releasever/updates/$basearch/
+name=CentOS-$vaultver - Updates
+baseurl=http://vault.centos.org/$vaultver/updates/$basearch/
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
 enabled=0
 
 [vault-extras]
-name=CentOS-$releasever - Extras
-baseurl=http://vault.centos.org/$releasever/extras/$basearch/
+name=CentOS-$vaultver - Extras
+baseurl=http://vault.centos.org/$vaultver/extras/$basearch/
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
 enabled=0
 
 [vault-centosplus]
-name=CentOS-releasever - CentOSPlus
-baseurl=http://vault.centos.org/$releasever/centosplus/$basearch/
+name=CentOS-vaultver - CentOSPlus
+baseurl=http://vault.centos.org/$vaultver/centosplus/$basearch/
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
 enabled=0
 
 [vault-fasttrack]
-name=CentOS-$releasever - CentOSPlus
-baseurl=http://vault.centos.org/$releasever/fasttrack/$basearch/
+name=CentOS-$vaultver - CentOSPlus
+baseurl=http://vault.centos.org/$vaultver/fasttrack/$basearch/
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
 enabled=0
