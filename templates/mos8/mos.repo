@@ -12,19 +12,19 @@ gpgcheck = 0
 
 [mos-os]
 name = MOS-8 OS
-baseurl = http://perestroika-repo-tst.infra.mirantis.net/mos-repos/centos/mos8.0-centos7-fuel/os/x86_64
+baseurl = http://mirror.fuel-infra.org/mos-repos/centos/mos8.0-centos7-fuel/os/x86_64
 enabled = 1
 gpgcheck = 0
 
 [mos-updates]
 name = MOS-8 Updates
-baseurl = http://perestroika-repo-tst.infra.mirantis.net/mos-repos/centos/mos8.0-centos7-fuel/updates/x86_64
+baseurl = http://mirror.fuel-infra.org/mos-repos/centos/mos8.0-centos7-fuel/updates/x86_64
 enabled = 1
 gpgcheck = 0
 
 [mos-proposed]
 name = MOS-8 Proposed
-baseurl = http://perestroika-repo-tst.infra.mirantis.net/mos-repos/centos/mos8.0-centos7-fuel/proposed/x86_64
+baseurl = http://mirror.fuel-infra.org/mos-repos/centos/mos8.0-centos7-fuel/proposed/x86_64
 enabled = 1
 gpgcheck = 0
 
