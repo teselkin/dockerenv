@@ -2,9 +2,8 @@
 
 set -o errexit
 
-exec 4>/tmp/xtrace.log
-export BASH_XTRACEFD=4
-set -o xtrace
+#exec 4>/tmp/xtrace.log
+#export BASH_XTRACEFD=4
 
 exec &> >(tee -a /tmp/debug.log)
 
@@ -30,6 +29,72 @@ Usage:
 EOF
 }
 
+find_missed_deps() {
+  local pkgs
+
+  pkgs=$(yum -q list available --disablerepo=\* --enablerepo=local | awk '{if(NR>1){print $1}}')
+
+  RETVAL=$(mktemp)
+  yum deplist ${pkgs} | awk -v outfile=${RETVAL} '
+BEGIN {
+  p = ""
+  n = ""
+  split("", a)
+}
+/^package\:/ { p = $2 " " $3; next }
+/^[[:space:]]+dependency\:/ { n = $2; next }
+/Unsatisfied dependency/ {
+  print "Got unsatisfied dependency " n " for package " p
+  a[n] = n
+}
+END {
+  c = 0
+  for(k in a) {
+   c += 1
+   print k ".rpm" >> outfile
+  }
+  if (c == 0) {
+    system("rm -f " outfile)
+  }
+}'
+}
+
+download_from_file() {
+  local pkg
+  local name
+
+  while read name; do
+    pkg=${name%%.rpm}
+    sudo yumdownloader -v --enablerepo base --enablerepo updates \
+      --destdir ${tmpdir}/Packages ${pkg}
+  done < <(awk '{for(i=1;i<=NF;i++){if($i~/\.rpm$/){print $i}}}' "${1}")
+}
+
+download_from_list() {
+  sudo yumdownloader -v --enablerepo base --enablerepo updates \
+    --destdir ${tmpdir}/Packages "${@}"
+}
+
+rebuild_local_repo() {
+  pushd ${tmpdir}
+  if [ -d repodata ]; then
+    rm -rf repodata
+  fi
+  createrepo .
+  popd
+
+  cat << EOF | sudo tee /etc/yum.repos.d/local.repo
+[local]
+name=Local Repo
+baseurl=file://${tmpdir}
+enabled=1
+gpgcheck=0
+EOF
+
+  sudo yum makecache
+}
+
+
 from_file=''
 from_list=''
 
@@ -50,6 +115,8 @@ while [ -n "$1" ]; do
   esac
 done
 
+set -o xtrace
+
 tmpdir=$(mktemp -d)
 
 echo "Tempdir ${tmpdir}"
@@ -60,29 +127,24 @@ sudo yum makecache
 mkdir -p ${tmpdir}/Packages
 
 if [ -f "${from_file}" ]; then
-  {
-    awk '{for(i=1;i<=NF;i++){if($i~/\.rpm$/){print $i}}}' ${from_file}
-  } | while read name; do
-    pkg=${name%%.rpm}
-    sudo yumdownloader --enablerepo base --enablerepo updates \
-      --destdir ${tmpdir}/Packages ${pkg}
-  done
+  download_from_file "${from_file}"
 fi
 
 if [ -n "${from_list}" ]; then
-  sudo yumdownloader --enablerepo base --enablerepo updates \
-    --destdir ${tmpdir}/Packages ${from_list}
+  download_from_list "${from_list}"
 fi
 
+rebuild_local_repo
+find_missed_deps
+missed_deps="${RETVAL}"
+while [ -f "${missed_deps}" ]; do
+  download_from_file ${missed_deps}
+  rebuild_local_repo
+  find_missed_deps
+  missed_deps="${RETVAL}"
+done
+
 pushd ${tmpdir}
-createrepo .
 tar -czvf /workspace/updates.tar.gz .
 popd
 
-cat << EOF | sudo tee /etc/yum.repos.d/local.repo
-[local]
-name=Local Repo
-baseurl=file://${tmpdir}
-enabled=1
-gpgcheck=0
-EOF
