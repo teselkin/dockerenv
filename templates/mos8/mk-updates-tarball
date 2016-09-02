@@ -30,12 +30,24 @@ EOF
 }
 
 find_missed_deps() {
-  local pkgs
+  local repos
+  local available_pkgs=$(mktemp)
+  local missed_pkgs=$(mktemp)
 
-  pkgs=$(yum -q list available --disablerepo=\* --enablerepo=local | awk '{if(NR>1){print $1}}')
+  repos='--disablerepo=\*'
+  for repo in ${LOCAL_REPO} ${MOS_REPOS}; do
+    repos="${repos} --enablerepo=${repo}"
+  done
 
-  RETVAL=$(mktemp)
-  yum deplist ${pkgs} | awk -v outfile=${RETVAL} '
+  eval "yum -q list available ${repos}" | awk -v ofile=${available_pkgs} '
+{
+  if ( NR > 1 ) {
+    print $1 >> ofile
+  }
+}'
+
+  while read pkg; do
+    yum deplist ${pkg} | awk -v ofile=${missed_pkgs} '
 BEGIN {
   p = ""
   n = ""
@@ -48,31 +60,46 @@ BEGIN {
   a[n] = n
 }
 END {
-  c = 0
   for(k in a) {
-   c += 1
-   print k ".rpm" >> outfile
-  }
-  if (c == 0) {
-    system("rm -f " outfile)
+   print k ".rpm" >> ofile
   }
 }'
+  done < ${available_pkgs}
+
+  RETVAL=$(mktemp)
+  cat ${missed_pkgs} | sort -u > ${RETVAL}
+  if [ $(cat ${RETVAL} | wc -l) -eq 0 ]; then
+    rm -f ${RETVAL}
+  fi
+
+  rm -f ${available_pkgs}
+  rm -f ${missed_pkgs}
 }
 
 download_from_file() {
   local pkg
   local name
+  local repos
+
+  for name in ${CENTOS_REPOS}; do
+    repos="${repos} --enablerepo=${name}"
+  done
 
   while read name; do
     pkg=${name%%.rpm}
-    sudo yumdownloader -v --enablerepo base --enablerepo updates \
-      --destdir ${tmpdir}/Packages ${pkg}
+    eval "sudo yumdownloader ${repos} --destdir ${tmpdir}/Packages ${pkg}"
   done < <(awk '{for(i=1;i<=NF;i++){if($i~/\.rpm$/){print $i}}}' "${1}")
 }
 
 download_from_list() {
-  sudo yumdownloader -v --enablerepo base --enablerepo updates \
-    --destdir ${tmpdir}/Packages "${@}"
+  local name
+  local repos
+
+  for name in ${CENTOS_REPOS}; do
+    repos="${repos} --enablerepo=${name}"
+  done
+
+  eval "sudo yumdownloader ${repos} --destdir ${tmpdir}/Packages ${@}"
 }
 
 rebuild_local_repo() {
@@ -97,6 +124,12 @@ EOF
 
 from_file=''
 from_list=''
+update_tarball=''
+
+LOCAL_REPO='local'
+MOS_REPOS=${MOS_REPOS:-'mos-os mos-updates mos-proposed'}
+VAULT_REPOS=${VAULT_REPOS:-'vault-base'}
+CENTOS_REPOS=${CENTOS_REPOS:-'base updates base-debuginfo'}
 
 while [ -n "$1" ]; do
   case "$1" in
@@ -106,6 +139,10 @@ while [ -n "$1" ]; do
     ;;
     -f|--from-file)
       from_file="$2"
+      shift 2
+    ;;
+    -u|--update)
+      update_tarball=$(readlink -e "$2")
       shift 2
     ;;
     *)
@@ -121,8 +158,14 @@ tmpdir=$(mktemp -d)
 
 echo "Tempdir ${tmpdir}"
 
-sudo yum-config-manager --enable base-debuginfo
-sudo yum makecache
+#sudo yum-config-manager --enable base-debuginfo
+#sudo yum makecache
+
+if [ -n "${update_tarball}" ]; then
+  pushd ${tmpdir}
+  tar -xzvf ${update_tarball}
+  popd
+fi
 
 mkdir -p ${tmpdir}/Packages
 
