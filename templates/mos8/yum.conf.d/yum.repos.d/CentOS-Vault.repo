@@ -2,37 +2,37 @@
 # tree.
 
 [vault-base]
+enabled=1
 name=CentOS-$vaultver - Base
 baseurl=http://vault.centos.org/$vaultver/os/$basearch/
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
-enabled=0
 
 [vault-updates]
+enabled=1
 name=CentOS-$vaultver - Updates
 baseurl=http://vault.centos.org/$vaultver/updates/$basearch/
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
-enabled=0
 
 [vault-extras]
+enabled=0
 name=CentOS-$vaultver - Extras
 baseurl=http://vault.centos.org/$vaultver/extras/$basearch/
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
-enabled=0
 
 [vault-centosplus]
+enabled=0
 name=CentOS-vaultver - CentOSPlus
 baseurl=http://vault.centos.org/$vaultver/centosplus/$basearch/
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
-enabled=0
 
 [vault-fasttrack]
+enabled=0
 name=CentOS-$vaultver - CentOSPlus
 baseurl=http://vault.centos.org/$vaultver/fasttrack/$basearch/
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
-enabled=0
 

@@ -2,10 +2,18 @@
 
 set -o errexit
 
-#exec 4>/tmp/xtrace.log
-#export BASH_XTRACEFD=4
+if [[ '-d|--debug' =~ $1 ]]; then
+  shift
+  #exec 4>/tmp/xtrace.log
+  #export BASH_XTRACEFD=4
+  exec &> >(tee -a /tmp/debug.log)
+  set -o xtrace
+fi
 
-exec &> >(tee -a /tmp/debug.log)
+cleanup(){
+  sudo umount ${BUILDDIR}/mos-iso || true
+}
+trap cleanup EXIT
 
 usage(){
   cat << EOF
@@ -23,171 +31,328 @@ Usage:
 
   mk-updates-tarball [-h] [-f <filename>] [package [package]]
 
-  -h|--help      - show this message and exit
-  -f|--from-file - download packages listed in a file
+  -h|--help - show this message and exit
+  -f|--file - download packages listed in a file
 
 EOF
 }
 
-find_missed_deps() {
-  local repos
-  local available_pkgs=$(mktemp)
-  local missed_pkgs=$(mktemp)
-
-  repos='--disablerepo=\*'
-  for repo in ${LOCAL_REPO} ${MOS_REPOS}; do
-    repos="${repos} --enablerepo=${repo}"
-  done
-
-  eval "yum -q list available ${repos}" | awk -v ofile=${available_pkgs} '
-{
-  if ( NR > 1 ) {
-    print $1 >> ofile
-  }
-}'
-
-  while read pkg; do
-    yum deplist ${pkg} | awk -v ofile=${missed_pkgs} '
-BEGIN {
-  p = ""
-  n = ""
-  split("", a)
-}
-/^package\:/ { p = $2 " " $3; next }
-/^[[:space:]]+dependency\:/ { n = $2; next }
-/Unsatisfied dependency/ {
-  print "Got unsatisfied dependency " n " for package " p
-  a[n] = n
-}
-END {
-  for(k in a) {
-   print k ".rpm" >> ofile
-  }
-}'
-  done < ${available_pkgs}
-
-  RETVAL=$(mktemp)
-  cat ${missed_pkgs} | sort -u > ${RETVAL}
-  if [ $(cat ${RETVAL} | wc -l) -eq 0 ]; then
-    rm -f ${RETVAL}
-  fi
-
-  rm -f ${available_pkgs}
-  rm -f ${missed_pkgs}
+die(){
+  cat << EOF
+***** ***** *****
+$@
+***** ***** *****
+EOF
+  exit 1
 }
 
-download_from_file() {
-  local pkg
-  local name
-  local repos
-
-  for name in ${CENTOS_REPOS}; do
-    repos="${repos} --enablerepo=${name}"
-  done
-
-  while read name; do
-    pkg=${name%%.rpm}
-    eval "sudo yumdownloader ${repos} --destdir ${tmpdir}/Packages ${pkg}"
-  done < <(awk '{for(i=1;i<=NF;i++){if($i~/\.rpm$/){print $i}}}' "${1}")
+say(){
+  echo "$@"
 }
 
-download_from_list() {
-  local name
-  local repos
-
-  for name in ${CENTOS_REPOS}; do
-    repos="${repos} --enablerepo=${name}"
-  done
-
-  eval "sudo yumdownloader ${repos} --destdir ${tmpdir}/Packages ${@}"
+_yum() {
+  eval "yum -c ${BUILDDIR}/yum.conf.d/yum.conf $@"
 }
 
 rebuild_local_repo() {
-  pushd ${tmpdir}
+  pushd ${BUILDDIR}/local.repo.d
   if [ -d repodata ]; then
     rm -rf repodata
   fi
   createrepo .
   popd
 
-  cat << EOF | sudo tee /etc/yum.repos.d/local.repo
+  cat << EOF | tee ${BUILDDIR}/yum.conf.d/yum.repos.d/local.repo
 [local]
 name=Local Repo
-baseurl=file://${tmpdir}
+baseurl=file://${BUILDDIR}/local.repo.d
 enabled=1
 gpgcheck=0
 EOF
 
-  sudo yum makecache
+  _yum makecache
+  _yum repolist
+}
+
+download_packages() {
+  local ifile=$1
+
+  sed -i -r '/^[[:space:]]*$/d' ${ifile}
+
+  while read name; do
+    yumdownloader --config ${BUILDDIR}/yum.conf.d/yum.conf \
+      --archlist x86_64 --exclude '*i?86' \
+      --destdir ${BUILDDIR}/local.repo.d/Packages ${name}
+  done < ${ifile}
+}
+
+verify_repo_integrity() {
+  local deplist_parser=$(mktemp)
+  local blacklist=$(mktemp)
+  local pkgs=$(mktemp)
+
+  unset RETVAL
+
+  local repos='--disablerepo=\*'
+  while [ -n "$1" ]; do
+    case "$1" in
+    -l|--list)
+      cat ${2} > ${pkgs}.list
+      shift
+    ;;
+    *)
+      repos="${repos} --enablerepo=${1}"
+    ;;
+    esac
+    shift
+  done
+
+  cat << "EOF" > ${deplist_parser}
+BEGIN {
+  p = ""
+  n = ""
+  v = ""
+}
+/^package\:/ {
+  p = $2
+  v = $3
+  next
+}
+/^[[:space:]]+dependency\:/ {
+  n = $2
+  next
+}
+/Unsatisfied dependency/ {
+  print "Got unsatisfied dependency " n " for package " p " " v
+  print p >> ofile ".broken"
+  print n >> ofile
+}
+EOF
+
+  # The packages listed below are broken in MOS repository
+  cat << "EOF" > ${blacklist}
+ceph
+ceph-common
+cephfs-java
+ceph-fuse
+ceph-test
+cluster-glue
+conntrack-tools
+crmsh
+emacs-erlang
+fb303-java
+koan
+libcephfs_jni1
+libcephfs_jni1-devel
+libnetfilter_cthelper-devel
+libnetfilter_cttimeout-devel
+libthrift-java
+libthrift-javadoc
+livecd-tools
+mongodb
+mongodb-server
+MySQL-python-debug
+openstack-cinder
+openstack-dashboard
+openstack-neutron
+openstack-nova-compute
+openstack-nova-network
+perl-qpid-proton
+perl-thrift
+postgresql-contrib
+pysnmp
+python-cinder
+python-imaging-devel
+python-imaging-sane
+python-imaging-tk
+python-ncclient
+python-pillow-devel
+python-pillow-qt
+python-pillow-sane
+python-pillow-tk
+python-pylibmc
+python-rtslib
+python-twisted
+rbd-fuse
+thrift-devel
+thrift-qt
+uwsgi-plugin-jvm
+uwsgi-plugin-php
+uwsgi-plugin-rpc
+uwsgi-plugin-rrdtool
+wxGTK-devel
+wxGTK-media
+Xaw3d-devel
+yaml-cpp-devel
+EOF
+
+  # Generate sed template file from blacklist
+  while read line; do
+    echo "/^${line}\.(noarch|i.86|x86_64)\$/d" >> ${blacklist}.sed
+  done < ${blacklist}
+
+  if [ ! -f ${pkgs}.list ]; then
+    touch ${pkgs}.list
+    _yum --quiet --show-duplicates ${repos} list available \
+      | awk -v ofile=${pkgs}.list '{if(NR>1){a[$1]=$1}};END{for(k in a){print k >> ofile}}'
+  fi
+
+  # Remove blacklisted packages from list of available packages
+  sed -r -i -f ${blacklist}.sed ${pkgs}.list
+
+  # Find unsatisfied dependencies
+  sort -u -o ${pkgs}.list ${pkgs}.list
+  cat ${pkgs}.list | awk '{if(c++ < 100){s=s " " $0}else{print s;c=0;s=""}};END{print s}' > ${pkgs}.longlist
+  while read line; do
+    _yum ${repos} deplist ${line} | awk -f ${deplist_parser} -v ofile=${pkgs}
+  done < ${pkgs}.longlist
+
+  sort -u -o ${pkgs} ${pkgs}
+  sort -u -o ${pkgs}.broken ${pkgs}.broken
+
+  if [ $(cat ${pkgs} | wc -l) -gt 0 ]; then
+    RETVAL=${pkgs}
+    return 1
+  fi
+
+#  rm -f ${pkgs} ||:
+#  rm -f ${pkgs}.list ||:
+#  rm -f ${pkgs}.missed ||:
+#  rm -f ${pkgs}.broken ||:
 }
 
 
-from_file=''
-from_list=''
-update_tarball=''
+mount_iso(){
+  local iso=$1
 
-LOCAL_REPO='local'
-MOS_REPOS=${MOS_REPOS:-'mos-os mos-updates mos-proposed'}
-VAULT_REPOS=${VAULT_REPOS:-'vault-base'}
-CENTOS_REPOS=${CENTOS_REPOS:-'base updates base-debuginfo'}
+  unset RETVAL
+
+  if [ -z "${iso}" ]; then
+    die "\$iso not set"
+  fi
+
+  local iso_mountpoint=$(mount | sed -rn "s|^(.*${iso}) on (.+) type .+$|\2|p")
+  if [ -z "${iso_mountpoint}" ]; then
+    say "ISO ${iso} is not mounted"
+    iso_mountpoint=${BUILDDIR}/mos-iso
+    mkdir -p ${iso_mountpoint}
+    if [ -f ${iso} ]; then
+      sudo mount ${iso} ${iso_mountpoint}
+    else
+      die "${iso} not found"
+    fi
+  fi
+
+  cat << EOF | tee ${BUILDDIR}/yum.conf.d/yum.repos.d/mos-iso.repo
+[mos-iso]
+name=MOS ISO
+baseurl=file://${iso_mountpoint}
+enabled=1
+gpgcheck=0
+EOF
+
+  RETVAL=${iso_mountpoint}
+}
+
+
+append=false
+pkg_list=$(mktemp)
+out_file='updates.tar.gz'
+BUILDDIR=$(mktemp -d)
+
 
 while [ -n "$1" ]; do
   case "$1" in
+    -a|--append)
+      append=true
+    ;;
+    -o|--out-file)
+      out_file=$2
+      shift
+    ;;
+    -i|--iso)
+      iso=$2
+      shift
+    ;;
     -h|--help)
       usage
       exit 0
     ;;
-    -f|--from-file)
-      from_file="$2"
-      shift 2
-    ;;
-    -u|--update)
-      update_tarball=$(readlink -e "$2")
-      shift 2
-    ;;
-    *)
-      from_list="${from_list} $2"
+    -f|--file)
+      if [ -f "$2" ]; then
+        tmpfile=$(mktemp)
+        cp $2 ${tmpfile}
+        # pre-process file list to remove .rpm suffix, arch from package names
+        sed -i -r 's/(^|[[:space:]])([^[:space:]]+)\.rpm([[:space:]]|$)/\2/' ${tmpfile}
+        cat ${tmpfile} >> ${pkg_list}
+        rm ${tmpfile}
+      else
+        die "File not found '$2'"
+      fi
       shift
     ;;
+    *)
+      echo $1 >> ${pkg_list}
+    ;;
   esac
+  shift
 done
 
-set -o xtrace
 
+out_file=$(readlink -m ${out_file})
 tmpdir=$(mktemp -d)
 
-echo "Tempdir ${tmpdir}"
+mkdir -p ${BUILDDIR}/cache
+cp -r /etc/yum.conf.d ${BUILDDIR}/
+cat << EOF >> ${BUILDDIR}/yum.conf.d/yum.conf
+cachedir=${BUILDDIR}/cache
+reposdir=${BUILDDIR}/yum.conf.d/yum.repos.d
+EOF
 
-#sudo yum-config-manager --enable base-debuginfo
-#sudo yum makecache
+mount_iso ${iso}
 
-if [ -n "${update_tarball}" ]; then
-  pushd ${tmpdir}
-  tar -xzvf ${update_tarball}
-  popd
+_yum makecache
+_yum repolist
+
+mkdir -p ${BUILDDIR}/local.repo.d/Packages
+if $append && [ -f ${out_file} ]; then
+  tar -xzvf ${out_file} -C ${BUILDDIR}/local.repo.d
 fi
 
-mkdir -p ${tmpdir}/Packages
-
-if [ -f "${from_file}" ]; then
-  download_from_file "${from_file}"
-fi
-
-if [ -n "${from_list}" ]; then
-  download_from_list "${from_list}"
-fi
+download_packages ${pkg_list}
 
 rebuild_local_repo
-find_missed_deps
-missed_deps="${RETVAL}"
-while [ -f "${missed_deps}" ]; do
-  download_from_file ${missed_deps}
-  rebuild_local_repo
-  find_missed_deps
-  missed_deps="${RETVAL}"
+
+repolist='local mos-iso mos-os mos-proposed mos-updates'
+repo_broken=1
+pkgs_broken=0
+while [ ${repo_broken} -gt 0 ]; do
+  if [ ${repo_broken} -gt 5 ]; then
+    die "Failed to get repositories consistent in 5 iterations"
+  fi
+  if verify_repo_integrity ${repolist}; then
+    repo_broken=0
+  else
+    pkgs_broken=1
+  fi
+  while [ ${pkgs_broken} -gt 0 ]; do
+    if [ ${pkgs_broken} -gt 5 ]; then
+      die "Failed to download missed dependencies in 5 iterations"
+    fi
+    echo "Found unsatisfied dependencies:"
+    pkgs=${RETVAL}
+    cat ${pkgs}
+    download_packages ${pkgs}
+    rebuild_local_repo
+    if verify_repo_integrity -l ${pkgs}.broken ${repolist}; then
+      pkgs_broken=0
+    else
+      ((pkgs_broken++))
+    fi
+  done
 done
 
-pushd ${tmpdir}
-tar -czvf /workspace/updates.tar.gz .
+pushd ${BUILDDIR}/local.repo.d
+tar -czvf ${out_file} .
 popd
 

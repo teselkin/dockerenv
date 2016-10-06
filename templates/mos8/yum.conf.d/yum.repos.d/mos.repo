@@ -1,13 +1,13 @@
 [mos-base]
 name = MOS-8 Base
 baseurl = file:///data/reprepro/repos/mos8.0-centos/base/
-enabled = 1
+enabled = 0
 gpgcheck = 0
 
 [mos-centos]
 name = MOS-8 CentOS
 baseurl = file:///data/reprepro/repos/mos8.0-centos/mos-centos/
-enabled = 1
+enabled = 0
 gpgcheck = 0
 
 [mos-os]
