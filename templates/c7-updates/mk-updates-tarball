@@ -2,11 +2,13 @@
 
 set -o errexit
 
-exec 4>/tmp/xtrace.log
-export BASH_XTRACEFD=4
-set -o xtrace
-
-exec &> >(tee -a /tmp/debug.log)
+if [[ '-d|--debug' =~ $1 ]]; then
+  shift
+  #exec 4>/tmp/xtrace.log
+  #export BASH_XTRACEFD=4
+  exec &> >(tee -a /tmp/debug.log)
+  set -o xtrace
+fi
 
 usage(){
   cat << EOF
@@ -24,32 +26,66 @@ Usage:
 
   mk-updates-tarball [-h] [-f <filename>] [package [package]]
 
-  -h|--help      - show this message and exit
-  -f|--from-file - download packages listed in a file
+  -h|--help - show this message and exit
+  -f|--file - download packages listed in a file
 
 EOF
 }
 
-from_file=''
-from_list=''
+die(){
+  cat << EOF
+***** ***** *****
+$@
+***** ***** *****
+EOF
+  exit 1
+}
+
+say(){
+  echo "$@"
+}
+
+append=false
+pkg_list=$(mktemp)
+out_file='updates.tar.gz'
 
 while [ -n "$1" ]; do
   case "$1" in
+    -a|--append)
+      append=true
+    ;;
+    -o|--out-file)
+      out_file=$2
+      shift
+    ;;
     -h|--help)
       usage
       exit 0
     ;;
-    -f|--from-file)
-      from_file="$2"
-      shift 2
-    ;;
-    *)
-      from_list="${from_list} $2"
+    -f|--file)
+      if [ -f "$2" ]; then
+        tmpfile=$(mktemp)
+        cp $2 ${tmpfile}
+        # pre-process file list to remove .rpm suffix, arch from package names
+        sed -i -r 's/(^|[[:space:]])([^[:space:]]+)\.rpm([[:space:]]|$)/\2/' ${tmpfile}
+        #awk '{for(i=1;i<=NF;i++){if($i~/\.rpm$/){print $i}}}' $2 >> ${pkg_list}
+        cat ${tmpfile} >> ${pkg_list}
+        rm ${tmpfile}
+      else
+        die "File not found '$2'"
+      fi
       shift
     ;;
+    *)
+      echo $1 >> ${pkg_list}
+    ;;
   esac
+  shift
 done
 
+sed -i -r '/^[[:space:]]*$/d' ${pkg_list}
+
+out_file=$(readlink -m ${out_file})
 tmpdir=$(mktemp -d)
 
 echo "Tempdir ${tmpdir}"
@@ -57,21 +93,17 @@ echo "Tempdir ${tmpdir}"
 sudo yum-config-manager --enable base-debug-info
 mkdir -p ${tmpdir}/Packages
 
-if [ -f "${from_file}" ]; then
-  {
-    awk '{for(i=1;i<=NF;i++){if($i~/\.rpm$/){print $i}}}' ${from_file}
-  } | while read name; do
-    pkg=${name%%.rpm}
-    sudo yumdownloader --destdir ${tmpdir}/Packages ${pkg}
-  done
+if $append && [ -f ${out_file} ]; then
+  tar -xzvf ${out_file} -C ${tmpdir}
 fi
 
-if [ -n "${from_list}" ]; then
-  sudo yumdownloader --destdir ${tmpdir}/Packages ${from_list}
-fi
+while read name; do
+  sudo yumdownloader --archlist x86_64 --exclude '*i?86' \
+    --destdir ${tmpdir}/Packages ${name}
+done < ${pkg_list}
 
 pushd ${tmpdir}
 createrepo .
-tar -czvf /workspace/updates.tar.gz .
+tar -czvf ${out_file} .
 popd
 
