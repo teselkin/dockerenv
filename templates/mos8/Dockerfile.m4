@@ -9,7 +9,7 @@ RUN yum install -y \
   createrepo \
   tar
 
-RUN echo 7.1.1503 > /etc/yum/vars/vaultver
+#RUN echo 7.1.1503 > /etc/yum/vars/vaultver
 
 RUN mkdir /etc/yum.conf.d
 ADD yum.conf.d /etc/yum.conf.d/
