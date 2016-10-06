@@ -302,7 +302,7 @@ while [ -n "$1" ]; do
     -f|--file)
       if [ -f "$2" ]; then
         # pre-process file list to remove .rpm suffix, arch from package names
-        sed -rn 's/(^|.*[[:space:]])([^[:space:]]+(noarch|x86_64))(\.rpm|[[:space:]].*|$)/\2/p' ${2} >> ${pkg_list}
+        sed -rn 's/(^|.*[[:space:]])([^[:space:]]+(noarch|x86_64))((\.rpm|[[:space:]]).*|$)/\2/p' ${2} >> ${pkg_list}
       else
         die "File not found '$2'"
       fi
@@ -385,7 +385,7 @@ done
 
 echo '=== Compressing repository ==='
 pushd ${BUILDDIR}/local.repo.d
-tar -czf ${out_file} .
+tar -czvf ${out_file} .
 popd
 echo 'Done'
 echo ''
