@@ -16,15 +16,21 @@ baseurl = http://mirror.fuel-infra.org/mos-repos/centos/mos8.0-centos7-fuel/os/x
 enabled = 1
 gpgcheck = 0
 
-[mos-updates]
-name = MOS-8 Updates
-baseurl = http://mirror.fuel-infra.org/mos-repos/centos/mos8.0-centos7-fuel/updates/x86_64
-enabled = 1
-gpgcheck = 0
-
 [mos-proposed]
 name = MOS-8 Proposed
 baseurl = http://mirror.fuel-infra.org/mos-repos/centos/mos8.0-centos7-fuel/proposed/x86_64
+enabled = 0
+gpgcheck = 0
+
+[mos-security]
+name = MOS-8 Security
+baseurl = http://mirror.fuel-infra.org/mos-repos/centos/mos8.0-centos7-fuel/security/x86_64
+enabled = 1
+gpgcheck = 0
+
+[mos-updates]
+name = MOS-8 Updates
+baseurl = http://mirror.fuel-infra.org/mos-repos/centos/mos8.0-centos7-fuel/updates/x86_64
 enabled = 1
 gpgcheck = 0
 

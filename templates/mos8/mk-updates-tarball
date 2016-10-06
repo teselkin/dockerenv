@@ -54,7 +54,17 @@ _yum() {
   eval "yum -c ${BUILDDIR}/yum.conf.d/yum.conf $@"
 }
 
+pushd() {
+  command pushd "$@" > /dev/null
+}
+
+popd() {
+  command popd "$@" > /dev/null
+}
+
 rebuild_local_repo() {
+  echo "=== Rebuilding local repo ==="
+
   pushd ${BUILDDIR}/local.repo.d
   if [ -d repodata ]; then
     rm -rf repodata
@@ -62,7 +72,7 @@ rebuild_local_repo() {
   createrepo .
   popd
 
-  cat << EOF | tee ${BUILDDIR}/yum.conf.d/yum.repos.d/local.repo
+  cat << EOF > ${BUILDDIR}/yum.conf.d/yum.repos.d/local.repo
 [local]
 name=Local Repo
 baseurl=file://${BUILDDIR}/local.repo.d
@@ -70,12 +80,15 @@ enabled=1
 gpgcheck=0
 EOF
 
-  _yum makecache
-  _yum repolist
+  _yum makecache 2>&1 > /dev/null
+#  _yum repolist
+  echo ''
 }
 
 download_packages() {
   local ifile=$1
+
+  echo "=== Downloading packages ==="
 
   sed -i -r '/^[[:space:]]*$/d' ${ifile}
 
@@ -84,6 +97,8 @@ download_packages() {
       --archlist x86_64 --exclude '*i?86' \
       --destdir ${BUILDDIR}/local.repo.d/Packages ${name}
   done < ${ifile}
+
+  echo ''
 }
 
 verify_repo_integrity() {
@@ -208,7 +223,9 @@ EOF
   done < ${pkgs}.longlist
 
   sort -u -o ${pkgs} ${pkgs}
-  sort -u -o ${pkgs}.broken ${pkgs}.broken
+  if [ -f ${pkgs}.broken ]; then
+    sort -u -o ${pkgs}.broken ${pkgs}.broken
+  fi
 
   if [ $(cat ${pkgs} | wc -l) -gt 0 ]; then
     RETVAL=${pkgs}
@@ -231,9 +248,11 @@ mount_iso(){
     die "\$iso not set"
   fi
 
+  echo "=== Mounting ISO '${iso}' ==="
+
   local iso_mountpoint=$(mount | sed -rn "s|^(.*${iso}) on (.+) type .+$|\2|p")
   if [ -z "${iso_mountpoint}" ]; then
-    say "ISO ${iso} is not mounted"
+    echo "ISO ${iso} is not mounted"
     iso_mountpoint=${BUILDDIR}/mos-iso
     mkdir -p ${iso_mountpoint}
     if [ -f ${iso} ]; then
@@ -243,13 +262,15 @@ mount_iso(){
     fi
   fi
 
-  cat << EOF | tee ${BUILDDIR}/yum.conf.d/yum.repos.d/mos-iso.repo
+  cat << EOF > ${BUILDDIR}/yum.conf.d/yum.repos.d/mos-iso.repo
 [mos-iso]
 name=MOS ISO
 baseurl=file://${iso_mountpoint}
 enabled=1
 gpgcheck=0
 EOF
+  echo "ISO mounted at '${iso_mountpoint}'"
+  echo ''
 
   RETVAL=${iso_mountpoint}
 }
@@ -307,48 +328,65 @@ EOF
 
 mount_iso ${iso}
 
+echo "=== Updating yum metadata ==="
 _yum makecache
-_yum repolist
+echo ''
 
+echo "=== List available yum repositories ==="
+_yum repolist
+echo ''
+
+echo "=== Creating rpm repository ==="
 mkdir -p ${BUILDDIR}/local.repo.d/Packages
 if $append && [ -f ${out_file} ]; then
+  echo "Unpacking '${out_file}' to append packages later"
   tar -xzvf ${out_file} -C ${BUILDDIR}/local.repo.d
+else
+  echo "Done"
 fi
+echo ''
 
 download_packages ${pkg_list}
 
 rebuild_local_repo
 
-repolist='local mos-iso mos-os mos-proposed mos-updates'
+repolist='local mos-iso mos-os mos-security mos-updates'
 repo_broken=1
 pkgs_broken=0
 while [ ${repo_broken} -gt 0 ]; do
   if [ ${repo_broken} -gt 5 ]; then
     die "Failed to get repositories consistent in 5 iterations"
   fi
+  echo '=== Running full repository verification ==='
   if verify_repo_integrity ${repolist}; then
+    echo 'Looks good'
     repo_broken=0
   else
     pkgs_broken=1
   fi
+  echo ''
   while [ ${pkgs_broken} -gt 0 ]; do
     if [ ${pkgs_broken} -gt 5 ]; then
       die "Failed to download missed dependencies in 5 iterations"
     fi
-    echo "Found unsatisfied dependencies:"
     pkgs=${RETVAL}
-    cat ${pkgs}
     download_packages ${pkgs}
     rebuild_local_repo
+    echo "=== Checking packages ==="
     if verify_repo_integrity -l ${pkgs}.broken ${repolist}; then
+      echo 'Looks good'
       pkgs_broken=0
     else
       ((pkgs_broken++))
     fi
+    echo ''
   done
 done
 
+echo '=== Compressing repository ==='
 pushd ${BUILDDIR}/local.repo.d
-tar -czvf ${out_file} .
+tar -czf ${out_file} .
 popd
+echo 'Done'
+echo ''
 
