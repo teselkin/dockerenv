@@ -1,0 +1,36 @@
+[mos-base]
+name = MOS-7 Base
+baseurl = file:///data/reprepro/repos/mos7.0-centos/base/
+enabled = 0
+gpgcheck = 0
+
+[mos-centos]
+name = MOS-7 CentOS
+baseurl = file:///data/reprepro/repos/mos7.0-centos/mos-centos/
+enabled = 0
+gpgcheck = 0
+
+[mos-os]
+name = MOS-7 OS
+baseurl = http://mirror.fuel-infra.org/mos-repos/centos/mos7.0-centos6-fuel/os/x86_64
+enabled = 1
+gpgcheck = 0
+
+[mos-proposed]
+name = MOS-7 Proposed
+baseurl = http://mirror.fuel-infra.org/mos-repos/centos/mos7.0-centos6-fuel/proposed/x86_64
+enabled = 0
+gpgcheck = 0
+
+[mos-security]
+name = MOS-7 Security
+baseurl = http://mirror.fuel-infra.org/mos-repos/centos/mos7.0-centos6-fuel/security/x86_64
+enabled = 1
+gpgcheck = 0
+
+[mos-updates]
+name = MOS-7 Updates
+baseurl = http://mirror.fuel-infra.org/mos-repos/centos/mos7.0-centos6-fuel/updates/x86_64
+enabled = 1
+gpgcheck = 0
+

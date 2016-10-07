@@ -1,0 +1,378 @@
+#!/bin/bash
+
+set -o errexit
+
+if [[ '-d|--debug' =~ $1 ]]; then
+  shift
+  #exec 4>/tmp/xtrace.log
+  #export BASH_XTRACEFD=4
+  exec &> >(tee -a /tmp/debug.log)
+  set -o xtrace
+fi
+
+unset RETVAL
+unset CMDPREFIX
+
+cleanup(){
+  sudo umount ${BUILDDIR}/mos-iso || true
+}
+trap cleanup EXIT
+
+usage(){
+  cat << EOF
+
+mk-updates-tarball
+
+  Script to download rpm packages, create repository and compress into tar.gz file.
+  Packages names can be stored in a file or passed as command line arguments.
+
+  The script generates two log files in /tmp directory - xtrace.log and debug.log.
+
+  Resulting tarball named updates.tar.gz will be copied to /workspace directory.
+
+Usage:
+
+  mk-updates-tarball [-h] [-f <filename>] [package [package]]
+
+  -h|--help - show this message and exit
+  -f|--file - download packages listed in a file
+
+EOF
+}
+
+die(){
+  cat << EOF
+***** ***** *****
+$@
+***** ***** *****
+EOF
+  exit 1
+}
+
+say(){
+  echo "$@"
+}
+
+_yum() {
+  eval "${CMDPREFIX} yum -c ${BUILDDIR}/yum.conf.d/yum.conf $@"
+}
+
+_repoquery() {
+  eval "repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf $@"
+}
+
+pushd() {
+  command pushd "$@" > /dev/null
+}
+
+popd() {
+  command popd "$@" > /dev/null
+}
+
+rebuild_local_repo() {
+  echo "=== Rebuilding local repo ==="
+
+  pushd ${BUILDDIR}/local.repo.d
+  if [ -d repodata ]; then
+    rm -rf repodata
+  fi
+  createrepo .
+  popd
+
+  cat << EOF > ${BUILDDIR}/yum.conf.d/yum.repos.d/local.repo
+[local]
+name=Local Repo
+baseurl=file://${BUILDDIR}/local.repo.d
+enabled=1
+gpgcheck=0
+EOF
+
+  CMDPREFIX='sudo' _yum makecache 2>&1 > /dev/null
+#  _yum repolist
+  echo ''
+}
+
+download_packages() {
+  local ifile=$1
+
+  echo "=== Downloading packages ==="
+
+  sed -i -r '/^[[:space:]]*$/d' ${ifile}
+
+  while read name; do
+    yumdownloader --config ${BUILDDIR}/yum.conf.d/yum.conf \
+      --archlist x86_64 --exclude '*i?86' \
+      --destdir ${BUILDDIR}/local.repo.d/Packages ${name}
+  done < ${ifile}
+
+  echo ''
+}
+
+verify_repo_integrity() {
+  local deplist_parser=$(mktemp)
+  local list_available_parser=$(mktemp)
+  local blacklist=$(mktemp)
+  local pkgs=$(mktemp)
+
+  unset RETVAL
+
+  local repos='--disablerepo=\*'
+  while [ -n "$1" ]; do
+    case "$1" in
+    -l|--list)
+      cat ${2} > ${pkgs}.list
+      shift
+    ;;
+    *)
+      repos="${repos} --enablerepo=${1}"
+    ;;
+    esac
+    shift
+  done
+
+  cat << "EOF" > ${deplist_parser}
+BEGIN {
+  p = ""
+  n = ""
+  v = ""
+}
+/^package\:/ {
+  p = $2
+  v = $3
+  next
+}
+/^[[:space:]]+dependency\:/ {
+  n = $2
+  next
+}
+/Unsatisfied dependency/ {
+  print "Got unsatisfied dependency " n " for package " p " " v
+  print p >> ofile ".broken"
+  print n >> ofile
+}
+EOF
+
+  if [ ! -f ${pkgs}.list ]; then
+    _repoquery --all --qf="%{name}.%{arch}" ${repos} > ${pkgs}.list
+  fi
+
+  # Generate sed template file from blacklist
+  # Remove blacklisted packages from list of available packages
+  if [ -f /usr/share/mirantis/${RELEASE}/blacklist ]; then
+    cat /usr/share/mirantis/${RELEASE}/blacklist > ${blacklist}
+    awk '/^[[:space:]]*#/{next};{print "/^" $0 "\\.(noarch|i.86|x86_64)$/d"}' ${blacklist} > ${blacklist}.sed
+    sed -r -i -f ${blacklist}.sed ${pkgs}.list
+  fi
+
+  # Find unsatisfied dependencies
+  sort -u -o ${pkgs}.list ${pkgs}.list
+  awk '{if(c++ < 100){s=s " " $0}else{print s;c=0;s=""}};END{print s}' ${pkgs}.list > ${pkgs}.longlist
+  while read line; do
+    _yum ${repos} deplist ${line} | awk -f ${deplist_parser} -v ofile=${pkgs}
+  done < ${pkgs}.longlist
+
+  sort -u -o ${pkgs} ${pkgs}
+  if [ -f ${pkgs}.broken ]; then
+    sort -u -o ${pkgs}.broken ${pkgs}.broken
+  fi
+
+  if [ $(cat ${pkgs} | wc -l) -gt 0 ]; then
+    RETVAL=${pkgs}
+    return 1
+  fi
+
+#  rm -f ${pkgs} ||:
+#  rm -f ${pkgs}.list ||:
+#  rm -f ${pkgs}.missed ||:
+#  rm -f ${pkgs}.broken ||:
+}
+
+
+mount_iso(){
+  local iso=$1
+
+  unset RETVAL
+
+  if [ -z "${iso}" ]; then
+    die "\$iso not set"
+  fi
+
+  echo "=== Mounting ISO '${iso}' ==="
+
+  local iso_mountpoint=$(mount | sed -rn "s|^(.*${iso}) on (.+) type .+$|\2|p")
+  if [ -z "${iso_mountpoint}" ]; then
+    echo "ISO ${iso} is not mounted"
+    iso_mountpoint=${BUILDDIR}/mos-iso
+    mkdir -p ${iso_mountpoint}
+    if [ -f ${iso} ]; then
+      sudo mount ${iso} ${iso_mountpoint}
+    else
+      die "${iso} not found"
+    fi
+  fi
+
+  cat << EOF > ${BUILDDIR}/yum.conf.d/yum.repos.d/mos-iso.repo
+[mos-iso]
+name=MOS ISO
+baseurl=file://${iso_mountpoint}
+enabled=1
+gpgcheck=0
+EOF
+  echo "ISO mounted at '${iso_mountpoint}'"
+  echo ''
+
+  RETVAL=${iso_mountpoint}
+}
+
+
+append=false
+pkg_list=$(mktemp)
+out_file='updates.tar.gz'
+BUILDDIR=$(mktemp -d)
+RELEASE='mos8'
+
+
+while [ -n "$1" ]; do
+  case "$1" in
+    -a|--append)
+      append=true
+    ;;
+    -o|--out-file)
+      out_file=$2
+      shift
+    ;;
+    -i|--iso)
+      iso=$2
+      shift
+    ;;
+    -r|--release)
+      RELEASE=${2}
+      shift
+    ;;
+    -h|--help)
+      usage
+      exit 0
+    ;;
+    -f|--file)
+      if [ -f "$2" ]; then
+        # pre-process file list to remove .rpm suffix, arch from package names
+        sed -rn 's/(^|.*[[:space:]])([^[:space:]]+(noarch|x86_64))((\.rpm|[[:space:]]).*|$)/\2/p' ${2} >> ${pkg_list}
+      else
+        die "File not found '$2'"
+      fi
+      shift
+    ;;
+    *)
+      echo $1 >> ${pkg_list}
+    ;;
+  esac
+  shift
+done
+
+
+out_file=$(readlink -m ${out_file})
+tmpdir=$(mktemp -d)
+
+mkdir -p ${BUILDDIR}/cache
+if [ ! -d /usr/share/mirantis/${RELEASE}/yum.conf.d ]; then
+  die "Yum config template '/usr/share/mirantis/${RELEASE}/yum.conf.d' not found"
+fi
+
+cp -r /usr/share/mirantis/${RELEASE}/yum.conf.d ${BUILDDIR}/
+cat << EOF >> ${BUILDDIR}/yum.conf.d/yum.conf
+cachedir=${BUILDDIR}/cache
+reposdir=${BUILDDIR}/yum.conf.d/yum.repos.d
+EOF
+
+tmpfile=$(mktemp)
+case ${RELEASE} in
+  mos7)
+    cat << "EOF" > ${tmpfile}
+s/\$releasever/6/
+s/\$basearch/x86_64/
+EOF
+  ;;
+  mos8)
+    cat << "EOF" > ${tmpfile}
+s/\$releasever/7/
+s/\$basearch/x86_64/
+EOF
+  ;;
+  *)
+    die "Unsupported release '${RELEASE}'"
+  ;;
+esac
+find ${BUILDDIR}/yum.conf.d/yum.repos.d -name '*.repo' -type f \
+  | xargs -I {} sed -i -r -f ${tmpfile} {}
+rm ${tmpfile}
+
+if [ -n "${iso}" ]; then
+  mount_iso ${iso}
+fi
+
+echo "=== Updating yum metadata ==="
+CMDPREFIX='sudo' _yum makecache
+echo ''
+
+echo "=== List available yum repositories ==="
+_yum repolist
+echo ''
+
+echo "=== Creating rpm repository ==="
+mkdir -p ${BUILDDIR}/local.repo.d/Packages
+if $append && [ -f ${out_file} ]; then
+  echo "Unpacking '${out_file}' to append packages later"
+  tar -xzvf ${out_file} -C ${BUILDDIR}/local.repo.d
+else
+  echo "Done"
+fi
+echo ''
+
+download_packages ${pkg_list}
+
+rebuild_local_repo
+
+repolist='local mos-os mos-security mos-updates'
+if [ -n "${iso}" ]; then
+  repolist="${repolist} mos-iso"
+fi
+
+repo_broken=1
+pkgs_broken=0
+while [ ${repo_broken} -gt 0 ]; do
+  if [ ${repo_broken} -gt 5 ]; then
+    die "Failed to get repositories consistent in 5 iterations"
+  fi
+  echo '=== Running full repository verification ==='
+  if verify_repo_integrity ${repolist}; then
+    echo 'Looks good'
+    repo_broken=0
+  else
+    pkgs_broken=1
+  fi
+  echo ''
+  while [ ${pkgs_broken} -gt 0 ]; do
+    if [ ${pkgs_broken} -gt 5 ]; then
+      die "Failed to download missed dependencies in 5 iterations"
+    fi
+    pkgs=${RETVAL}
+    download_packages ${pkgs}
+    rebuild_local_repo
+    echo "=== Checking packages ==="
+    if verify_repo_integrity -l ${pkgs}.broken ${repolist}; then
+      echo 'Looks good'
+      pkgs_broken=0
+    else
+      ((pkgs_broken++))
+    fi
+    echo ''
+  done
+done
+
+echo '=== Compressing repository ==='
+pushd ${BUILDDIR}/local.repo.d
+tar -czvf ${out_file} .
+popd
+echo 'Done'
+echo ''
+
