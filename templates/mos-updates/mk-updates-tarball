@@ -2,7 +2,7 @@
 
 set -o errexit
 
-if [[ '-d|--debug' =~ $1 ]]; then
+if [[ "$1" =~ \-d|\-\-debug ]]; then
   shift
   #exec 4>/tmp/xtrace.log
   #export BASH_XTRACEFD=4
@@ -229,7 +229,7 @@ append=false
 pkg_list=$(mktemp)
 out_file='updates.tar.gz'
 BUILDDIR=$(mktemp -d)
-RELEASE='mos8'
+RELEASE='mos9'
 
 
 while [ -n "$1" ]; do
@@ -244,6 +244,9 @@ while [ -n "$1" ]; do
     -i|--iso)
       iso=$2
       shift
+    ;;
+    -I|--no-iso)
+      iso='unset'
     ;;
     -r|--release)
       RELEASE=${2}
@@ -271,7 +274,46 @@ done
 
 
 out_file=$(readlink -m ${out_file})
+yum_vars_sed=$(mktemp)
 tmpdir=$(mktemp -d)
+
+case ${RELEASE} in
+  mos7)
+    iso=${iso:-'MirantisOpenStack-7.0.iso'}
+    cat << "EOF" > ${yum_vars_sed}
+s/\$releasever/6/
+s/\$basearch/x86_64/
+EOF
+  ;;
+  mos8)
+    iso=${iso:-'MirantisOpenStack-8.0.iso'}
+    cat << "EOF" > ${yum_vars_sed}
+s/\$releasever/7/
+s/\$basearch/x86_64/
+EOF
+  ;;
+  mos9)
+    iso=${iso:-'MirantisOpenStack-9.0.iso'}
+    cat << "EOF" > ${yum_vars_sed}
+s/\$releasever/7/
+s/\$basearch/x86_64/
+EOF
+  ;;
+  *)
+    die "Unsupported release '${RELEASE}'"
+  ;;
+esac
+
+if [ "${iso}" = 'unset' ]; then
+  unset iso
+else
+  if [ -f "${iso}" ]; then
+    iso=$(readlink -e ${iso})
+  else
+    die "ISO file '${iso}' not found."
+  fi
+fi
+
 
 mkdir -p ${BUILDDIR}/cache
 if [ ! -d /usr/share/mirantis/${RELEASE}/yum.conf.d ]; then
@@ -284,27 +326,8 @@ cachedir=${BUILDDIR}/cache
 reposdir=${BUILDDIR}/yum.conf.d/yum.repos.d
 EOF
 
-tmpfile=$(mktemp)
-case ${RELEASE} in
-  mos7)
-    cat << "EOF" > ${tmpfile}
-s/\$releasever/6/
-s/\$basearch/x86_64/
-EOF
-  ;;
-  mos8)
-    cat << "EOF" > ${tmpfile}
-s/\$releasever/7/
-s/\$basearch/x86_64/
-EOF
-  ;;
-  *)
-    die "Unsupported release '${RELEASE}'"
-  ;;
-esac
 find ${BUILDDIR}/yum.conf.d/yum.repos.d -name '*.repo' -type f \
-  | xargs -I {} sed -i -r -f ${tmpfile} {}
-rm ${tmpfile}
+  | xargs -I {} sed -i -r -f ${yum_vars_sed} {}
 
 if [ -n "${iso}" ]; then
   mount_iso ${iso}

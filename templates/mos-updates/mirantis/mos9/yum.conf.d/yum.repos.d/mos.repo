@@ -1,0 +1,24 @@
+[mos-os]
+name = MOS-9 OS
+baseurl = http://mirror.fuel-infra.org/mos-repos/centos/mos9.0-centos7/os/x86_64
+enabled = 1
+gpgcheck = 0
+
+[mos-proposed]
+name = MOS-9 Proposed
+baseurl = http://mirror.fuel-infra.org/mos-repos/centos/mos9.0-centos7/proposed/x86_64
+enabled = 0
+gpgcheck = 0
+
+[mos-security]
+name = MOS-9 Security
+baseurl = http://mirror.fuel-infra.org/mos-repos/centos/mos9.0-centos7/security/x86_64
+enabled = 1
+gpgcheck = 0
+
+[mos-updates]
+name = MOS-9 Updates
+baseurl = http://mirror.fuel-infra.org/mos-repos/centos/mos9.0-centos7/updates/x86_64
+enabled = 1
+gpgcheck = 0
+
