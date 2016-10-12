@@ -2,21 +2,28 @@
 
 set -o errexit
 
+logfile=$(mktemp)
+
 if [[ "$1" =~ \-d|\-\-debug ]]; then
   shift
   #exec 4>/tmp/xtrace.log
   #export BASH_XTRACEFD=4
   exec &> >(tee -a /tmp/debug.log)
   set -o xtrace
+else
+  exec &> >(tee ${logfile})
 fi
-
-unset RETVAL
-unset CMDPREFIX
 
 cleanup(){
   sudo umount ${BUILDDIR}/mos-iso || true
 }
 trap cleanup EXIT
+
+echo "Running $0 $@"
+echo ''
+
+# ==== Functions begin here =====
+# ===============================
 
 usage(){
   cat << EOF
@@ -40,6 +47,7 @@ Usage:
 EOF
 }
 
+
 die(){
   cat << EOF
 ***** ***** *****
@@ -49,25 +57,31 @@ EOF
   exit 1
 }
 
+
 say(){
   echo "$@"
 }
+
 
 _yum() {
   eval "${CMDPREFIX} yum -c ${BUILDDIR}/yum.conf.d/yum.conf $@"
 }
 
+
 _repoquery() {
   eval "repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf $@"
 }
+
 
 pushd() {
   command pushd "$@" > /dev/null
 }
 
+
 popd() {
   command popd "$@" > /dev/null
 }
+
 
 rebuild_local_repo() {
   echo "=== Rebuilding local repo ==="
@@ -87,10 +101,12 @@ enabled=1
 gpgcheck=0
 EOF
 
-  CMDPREFIX='sudo' _yum makecache 2>&1 > /dev/null
+  CMDPREFIX='sudo' _yum makecache #2>&1 > /dev/null
 #  _yum repolist
+  echo 'Done'
   echo ''
 }
+
 
 download_packages() {
   local ifile=$1
@@ -100,13 +116,16 @@ download_packages() {
   sed -i -r '/^[[:space:]]*$/d' ${ifile}
 
   while read name; do
+    echo "* ${name}"
     yumdownloader --config ${BUILDDIR}/yum.conf.d/yum.conf \
       --archlist x86_64 --exclude '*i?86' \
       --destdir ${BUILDDIR}/local.repo.d/Packages ${name}
   done < ${ifile}
 
+  echo 'Done'
   echo ''
 }
+
 
 verify_repo_integrity() {
   local deplist_parser=$(mktemp)
@@ -224,6 +243,11 @@ EOF
   RETVAL=${iso_mountpoint}
 }
 
+# ==============================
+# ===== Functions end here =====
+
+unset RETVAL
+unset CMDPREFIX
 
 append=false
 pkg_list=$(mktemp)
@@ -342,13 +366,13 @@ _yum repolist
 echo ''
 
 echo "=== Creating rpm repository ==="
+echo "Repo path: ${BUILDDIR}/local.repo.d"
 mkdir -p ${BUILDDIR}/local.repo.d/Packages
 if $append && [ -f ${out_file} ]; then
   echo "Unpacking '${out_file}' to append packages later"
   tar -xzvf ${out_file} -C ${BUILDDIR}/local.repo.d
-else
-  echo "Done"
 fi
+echo "Done"
 echo ''
 
 download_packages ${pkg_list}
@@ -399,3 +423,6 @@ popd
 echo 'Done'
 echo ''
 
+if [[ -f ${logfile} ]]; then
+  mv ${logfile} ${out_file}.log.txt
+fi
