@@ -52,6 +52,7 @@ update_only=false
 template='ubuntu:latest'
 workspace=$PWD
 env_cmd='bash'
+create_opts=''
 
 
 while [ -n "$1" ]; do
@@ -63,6 +64,9 @@ while [ -n "$1" ]; do
     -N|--no-cache)
       no_cache=true
       shift
+    ;;
+    -o|--create-opts)
+      create_opts="${create_opts} $2"
     ;;
     -R|--rebuild)
       rebuild=true
@@ -184,6 +188,7 @@ call docker create \
   --volume ${HOME}/.ssh:${HOME}/.ssh:ro \
   --volume ${tmpdir}/tmp:/tmp:rw \
   --user $(id -u):$(id -g) \
+  ${create_opts} \
   ${image} ${env_cmd}
 
 if [ -f "${cidfile}" ]; then
