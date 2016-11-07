@@ -1,5 +1,17 @@
-ADD ${tmpdir}/etc/passwd /etc/
-ADD ${tmpdir}/etc/group /etc/
-RUN echo "${username} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/${username}
-RUN chmod 440 /etc/sudoers.d/${username}
-RUN /sbin/mkhomedir_helper ${username}
+RUN echo \
+IyEvYmluL2Jhc2gKcGFyc2VyPSQobWt0ZW1wKQpwYXJzZXJfb3V0PSQobWt0ZW1wKQpjYXQgPDwg\
+J0VPRicgPiAke3BhcnNlcn0KL151aWQvIHsKICB1aWQgPSAkMgogIHVpZF9uYW1lID0gJDMKICBu\
+ZXh0Cn0KL15naWQvIHsKICBnaWQgPSAkMgogIGdpZF9uYW1lID0gJDMKICBuZXh0Cn0KL15ncm91\
+cHMvIHsKICBmb3IgKGk9MiA7aTxORiA7aSs9MikgewogICAgYXJyWyRpXSA9ICQoaSsxKQogIH0K\
+fQpFTkQgewogIGdyb3VwcyA9ICIiCiAgZm9yIChrIGluIGFycikgewogICAgcHJpbnQgImdyb3Vw\
+YWRkIC0tZ2lkICIgayAiICIgYXJyW2tdCiAgICBpZiAoayAhPSBnaWQpIHsKICAgICAgaWYgKGdy\
+b3VwcyA9PSAiIikgewogICAgICAgIGdyb3VwcyA9IGsKICAgICAgfSBlbHNlIHsKICAgICAgICBn\
+cm91cHMgPSBncm91cHMgIiwiIGsKICAgICAgfQogICAgfQogIH0KICBwcmludCAidXNlcmFkZCAt\
+LXVpZCAiIHVpZCAiIC0tZ2lkICIgZ2lkICIgLS1ncm91cHMgIiBncm91cHMgIiAiIHVpZF9uYW1l\
+CiAgcHJpbnQgImVjaG8gJyIgdWlkX25hbWUgIiBBTEw9KEFMTCkgTk9QQVNTV0Q6QUxMJyA+IC9l\
+dGMvc3Vkb2Vycy5kLyIgdWlkX25hbWUKICBwcmludCAiY2htb2QgNDQwIC9ldGMvc3Vkb2Vycy5k\
+LyIgdWlkX25hbWUKfQpFT0YKZWNobyAiJHtJRH0iIHwgdHIgJ1s6Ymxhbms6XScgJ1xuJyB8IHRy\
+ICc9KCksJyAnICcgfCBhd2sgLWYgJHtwYXJzZXJ9ID4gJHtwYXJzZXJfb3V0fQpzb3VyY2UgJHtw\
+YXJzZXJfb3V0fQpybSAke3BhcnNlcn0Kcm0gJHtwYXJzZXJfb3V0fQo=\
+| base64 -d | ID=${idstring} bash
+
