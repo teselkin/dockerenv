@@ -67,6 +67,7 @@ while [ -n "$1" ]; do
     ;;
     -o|--create-opts)
       create_opts="${create_opts} $2"
+      shift 2
     ;;
     -R|--rebuild)
       rebuild=true
@@ -140,19 +141,13 @@ if [ -d "${TEMPLATES_DIR}/${template}" ]; then
         mv Dockerfile.tmp Dockerfile
       fi
     fi
-#    tmpdir=$(mktemp -d --tmpdir=.)
-#    mkdir ${tmpdir}/etc
-#    cp /etc/passwd ${tmpdir}/etc
-#    cp /etc/group ${tmpdir}/etc
     call docker build \
       --rm \
-#      --build-arg tmpdir=${tmpdir} \
       --build-arg username=${USER} \
       --build-arg idstring="'$(id)'" \
       --tag ${image} \
       ${build_opts} .
 
-#    rm -rf ${tmpdir}
     popd
   fi
 else
