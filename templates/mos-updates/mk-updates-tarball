@@ -108,6 +108,55 @@ EOF
 }
 
 
+resolve_dependencies() {
+  local ifile=$1
+  local pkgs=$(mktemp)
+  local name
+  local pkg_name
+  local srpm_name
+
+  echo '=== Resolving dependencies ==='
+  unset RETVAL
+
+  while read name; do
+    >${pkgs}.1
+    repoquery --config ${BUILDDIR}/yum.conf.d/yum.conf \
+      --archlist x86_64,noarch --qf '%{nevra}' \
+      --whatprovides ${name} > ${pkgs}.1
+    if [[ $(cat ${pkgs}.1 | wc -l) -eq 0 ]]; then
+      pkg_name=${name}
+      while [[ -n "${pkg_name}" ]]; do
+        >${pkgs}.1
+        repoquery --config ${BUILDDIR}/yum.conf.d/yum.conf \
+          --archlist x86_64,noarch --qf '%{nevra}' \
+          ${pkg_name} > ${pkgs}.1
+        if [[ $(cat ${pkgs}.1 | wc -l) -gt 0 ]]; then
+          pkg_name=
+        else
+          if [[ "${pkg_name}" =~ \. ]]; then
+            pkg_name=${pkg_name%.*}
+          else
+            pkg_name=
+          fi
+        fi
+      done
+    fi
+    cat ${pkgs}.1 >> ${pkgs}.2
+  done < ${ifile}
+
+  repoquery --all --archlist x86_64,noarch --qf '%{sourcerpm} %{nevra}' > ${pkgs}.map
+  while read name; do
+    srpm_name=$(awk -v s=${name} '{if($2==s){print $1;exit}}' ${pkgs}.map)
+    awk -v s=${srpm_name} '{if($1==s){print $2}}' ${pkgs}.map >> ${pkgs}.3
+  done < ${pkgs}.2
+
+  cat ${pkgs}.3 | sort -u > ${pkgs}
+  echo ''
+
+  RETVAL=${pkgs}
+}
+
+
 download_packages() {
   local ifile=$1
 
@@ -250,6 +299,7 @@ unset RETVAL
 unset CMDPREFIX
 
 append=false
+resolve=false
 pkg_list=$(mktemp)
 out_file='updates.tar.gz'
 BUILDDIR=$(mktemp -d)
@@ -275,6 +325,9 @@ while [ -n "$1" ]; do
     -r|--release)
       RELEASE=${2}
       shift
+    ;;
+    -R|--resolve)
+      resolve=true
     ;;
     -h|--help)
       usage
@@ -375,8 +428,12 @@ fi
 echo "Done"
 echo ''
 
-download_packages ${pkg_list}
-
+# Set RETVAL to pkg_list since no function returned RETVAL yet
+RETVAL=${pkg_list}
+if ${resolve}; then
+  resolve_dependencies ${pkg_list}
+fi
+download_packages ${RETVAL}
 rebuild_local_repo
 
 repolist='local mos-os mos-security mos-updates'
@@ -403,7 +460,10 @@ while [ ${repo_broken} -gt 0 ]; do
       die "Failed to download missed dependencies in 5 iterations"
     fi
     pkgs=${RETVAL}
-    download_packages ${pkgs}
+    if ${resolve}; then
+      resolve_dependencies ${pkgs}
+    fi
+    download_packages ${RETVAL}
     rebuild_local_repo
     echo "=== Checking packages ==="
     if verify_repo_integrity -l ${pkgs}.broken ${repolist}; then
