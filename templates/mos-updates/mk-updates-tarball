@@ -108,15 +108,15 @@ EOF
 }
 
 
-resolve_dependencies() {
+resolve_names() {
+  unset RETVAL
+
   local ifile=$1
   local pkgs=$(mktemp)
   local name
   local pkg_name
-  local srpm_name
 
-  echo '=== Resolving dependencies ==='
-  unset RETVAL
+  echo '=== Resolving packages names ==='
 
   while read name; do
     >${pkgs}.1
@@ -141,16 +141,30 @@ resolve_dependencies() {
         fi
       done
     fi
-    cat ${pkgs}.1 >> ${pkgs}.2
+    cat ${pkgs}.1 >> ${pkgs}
   done < ${ifile}
+
+  RETVAL=${pkgs}
+}
+
+
+resolve_srpm_packages() {
+  unset RETVAL
+
+  local ifile=$1
+  local pkgs=$(mktemp)
+  local name
+  local srpm_name
+
+  echo '=== Resolving packages by SRPM ==='
 
   repoquery --all --archlist x86_64,noarch --qf '%{sourcerpm} %{nevra}' > ${pkgs}.map
   while read name; do
     srpm_name=$(awk -v s=${name} '{if($2==s){print $1;exit}}' ${pkgs}.map)
-    awk -v s=${srpm_name} '{if($1==s){print $2}}' ${pkgs}.map >> ${pkgs}.3
-  done < ${pkgs}.2
+    awk -v s=${srpm_name} '{if($1==s){print $2}}' ${pkgs}.map >> ${pkgs}.1
+  done < ${ifile}
 
-  cat ${pkgs}.3 | sort -u > ${pkgs}
+  cat ${pkgs}.1 | sort -u > ${pkgs}
   echo ''
 
   RETVAL=${pkgs}
@@ -299,7 +313,7 @@ unset RETVAL
 unset CMDPREFIX
 
 append=false
-resolve=false
+resolve_srpm=false
 pkg_list=$(mktemp)
 out_file='updates.tar.gz'
 BUILDDIR=$(mktemp -d)
@@ -326,8 +340,8 @@ while [ -n "$1" ]; do
       RELEASE=${2}
       shift
     ;;
-    -R|--resolve)
-      resolve=true
+    -R|--resolve-srpm)
+      resolve_srpm=true
     ;;
     -h|--help)
       usage
@@ -429,9 +443,9 @@ echo "Done"
 echo ''
 
 # Set RETVAL to pkg_list since no function returned RETVAL yet
-RETVAL=${pkg_list}
-if ${resolve}; then
-  resolve_dependencies ${pkg_list}
+resolve_names ${pkg_list}
+if ${resolve_srpm}; then
+  resolve_srpm_packages ${RETVAL}
 fi
 download_packages ${RETVAL}
 rebuild_local_repo
@@ -459,9 +473,11 @@ while [ ${repo_broken} -gt 0 ]; do
     if [ ${pkgs_broken} -gt 5 ]; then
       die "Failed to download missed dependencies in 5 iterations"
     fi
+    # Assign RETVAL to pkgs as I need it later to verify broken packages
     pkgs=${RETVAL}
-    if ${resolve}; then
-      resolve_dependencies ${pkgs}
+    resolve_names ${pkgs}
+    if ${resolve_srpm}; then
+      resolve_srpm_packages ${RETVAL}
     fi
     download_packages ${RETVAL}
     rebuild_local_repo
