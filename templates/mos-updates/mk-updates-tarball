@@ -115,6 +115,7 @@ resolve_names() {
   local pkgs=$(mktemp)
   local name
   local pkg_name
+  local line
 
   echo '=== Resolving packages names ==='
 
@@ -141,9 +142,22 @@ resolve_names() {
         fi
       done
     fi
-    cat ${pkgs}.1 >> ${pkgs}
+
+    echo " * ${name}"
+    while read line; do
+      echo "  - ${line}"
+    done < ${pkgs}.1
+
+    local newest=$(cat ${pkgs}.1 | rpmdev-sort | tail -1)
+
+    echo "  ** ${newest}"
+    #cat ${pkgs}.1 >> ${pkgs}
+    echo "${newest}" >> ${pkgs}
+
   done < ${ifile}
 
+
+  echo ''
   RETVAL=${pkgs}
 }
 
@@ -154,19 +168,25 @@ resolve_srpm_packages() {
   local ifile=$1
   local pkgs=$(mktemp)
   local name
+  local line
   local srpm_name
 
   echo '=== Resolving packages by SRPM ==='
 
   repoquery --all --archlist x86_64,noarch --qf '%{sourcerpm} %{nevra}' > ${pkgs}.map
   while read name; do
+    >${pkgs}.1
     srpm_name=$(awk -v s=${name} '{if($2==s){print $1;exit}}' ${pkgs}.map)
-    awk -v s=${srpm_name} '{if($1==s){print $2}}' ${pkgs}.map >> ${pkgs}.1
+    awk -v s=${srpm_name} '{if($1==s){print $2}}' ${pkgs}.map > ${pkgs}.1
+    echo " * ${name}"
+    while read line; do
+      echo "  - ${line}"
+    done < ${pkgs}.1
+    cat ${pkgs}.1 >> ${pkgs}
   done < ${ifile}
+  sort -u -o ${pkgs} ${pkgs}
 
-  cat ${pkgs}.1 | sort -u > ${pkgs}
   echo ''
-
   RETVAL=${pkgs}
 }
 
@@ -177,6 +197,10 @@ download_packages() {
   echo "=== Downloading packages ==="
 
   sed -i -r '/^[[:space:]]*$/d' ${ifile}
+  # Do not download devel packages, they are not needed
+  #   but resolving dependencies for them dramatically increases
+  #   number of packages for download.
+  sed -i -r '/-devel[[:space:]\.$-]/d' ${ifile}
 
   while read name; do
     echo "* ${name}"
@@ -240,9 +264,11 @@ EOF
 
   # Generate sed template file from blacklist
   # Remove blacklisted packages from list of available packages
+  # First of all, ignore devel packages
+  echo '/-devel[[:space:]\.$-]/d' > ${blacklist}.sed
   if [ -f /usr/share/mirantis/${RELEASE}/blacklist ]; then
     cat /usr/share/mirantis/${RELEASE}/blacklist > ${blacklist}
-    awk '/^[[:space:]]*#/{next};{print "/^" $0 "\\.(noarch|i.86|x86_64)$/d"}' ${blacklist} > ${blacklist}.sed
+    awk '/^[[:space:]]*#/{next};{print "/^" $0 "\\.(noarch|i.86|x86_64)$/d"}' ${blacklist} >> ${blacklist}.sed
     sed -r -i -f ${blacklist}.sed ${pkgs}.list
   fi
 
@@ -495,8 +521,10 @@ done
 echo '=== Compressing repository ==='
 pushd ${BUILDDIR}/local.repo.d
 tar -czvf ${out_file} .
+count=$(find Packages -name '*.rpm' | wc -l)
 popd
-echo 'Done'
+echo '---'
+echo "${count} package(s) compressed."
 echo ''
 
 if [[ -f ${logfile} ]]; then

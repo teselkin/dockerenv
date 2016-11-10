@@ -7,7 +7,8 @@ RUN yum install -y \
   vim \
   yum-utils \
   createrepo \
-  tar
+  tar \
+  rpmdevtools
 
 #RUN echo 7.1.1503 > /etc/yum/vars/vaultver
 
