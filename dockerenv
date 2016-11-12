@@ -1,8 +1,10 @@
 #!/bin/bash
-
 set -o errexit
-#set -o xtrace
 
+if [[ "$1" == '-d' ]]; then
+  set -o xtrace
+  shift
+fi
 
 if [ -f "${HOME}/.dockerenvrc" ]; then
   source "${HOME}/.dockerenvrc"
@@ -33,6 +35,67 @@ call() {
   fi
 }
 
+run_hooks() {
+  local cid=$1
+  local hook=$2
+  local hooks=${TEMPLATES_DIR}/${template}/hooks
+  local ofile
+  if [[ -d ${hooks}/${hook} ]]; then
+    ofile=$(mktemp)
+    cat << 'EOF' > ${ofile}
+#!/bin/bash -x
+workdir=$(mktemp -d)
+tar -xzf ${0}.tar.gz -C ${workdir}
+run-parts --verbose ${workdir}
+rm -rf ${workdir}
+rm ${0}*
+EOF
+    tar -czf ${ofile}.tar.gz -C ${hooks}/${hook} .
+    call docker cp ${ofile} ${cid}:${ofile}
+    call docker cp ${ofile}.tar.gz ${cid}:${ofile}.tar.gz
+    call docker exec --tty --privileged --user 0 ${cid} \
+      /bin/bash ${ofile}
+    rm ${ofile}
+    rm ${ofile}.tar.gz
+  else
+    return 1
+  fi
+}
+
+
+create_and_start() {
+  unset RETVAL
+  local cid=
+  local tmpfile=$(mktemp)
+
+  # Create and start new container
+  call docker create \
+    --cidfile=${tmpfile}.cid \
+    --interactive \
+    --tty \
+    --privileged \
+    --volume ${workspace}:/workspace:rw \
+    --volume ${HOME}/.ssh:${HOME}/.ssh:ro \
+    --volume ${tmpdir}/tmp:/tmp:rw \
+    --user $(id -u):$(id -g) \
+    ${create_opts} \
+    ${image} ${env_cmd}
+
+  if [ -f "${tmpfile}".cid ]; then
+    cid=$(cat ${tmpfile}.cid)
+  fi
+
+  rm -f ${tmpfile} || true
+  rm -f ${tmpfile}.cid || true
+
+  if [[ -z "${cid}" ]]; then
+    die "cidfile '${tmpfile}.cid' not found after 'docker create'"
+  else
+    call docker start ${cid}
+  fi
+
+  RETVAL=${cid}
+}
 
 if [ -z "${BASE_DIR}" ]; then
   BASE_DIR=$(readlink -f $0)
@@ -155,13 +218,6 @@ else
 fi
 
 
-cidfile=$(mktemp)
-if [ -f "${cidfile}" ]; then
-  rm -f ${cidfile}
-else
-  die "Unable to create cidfile ${cidfile}"
-fi
-
 tmpdir=$(mktemp -d /tmp/dockerenv.${image//:/-}.XXXXXXXX)
 say "Temp mount point is at '${tmpdir}'"
 
@@ -172,55 +228,41 @@ if [ -z "${workspace}" ]; then
   mkdir -p ${workspace}
 fi
 
+create_and_start
+cid=${RETVAL}
 
-# Create and start new container
-call docker create \
-  --cidfile=${cidfile} \
-  --interactive \
-  --tty \
-  --privileged \
-  --volume ${workspace}:/workspace:rw \
-  --volume ${HOME}/.ssh:${HOME}/.ssh:ro \
-  --volume ${tmpdir}/tmp:/tmp:rw \
-  --user $(id -u):$(id -g) \
-  ${create_opts} \
-  ${image} ${env_cmd}
+commit_changes=false
 
-if [ -f "${cidfile}" ]; then
-  cid=$(cat ${cidfile})
-else
-  die "cidfile '${cidfile}' not found after 'docker create'"
+# Run post-build actions
+if ${do_build}; then
+  say "Running post-build hooks ..."
+  if run_hooks ${cid} post-build; then
+    commit_changes=true
+  fi
 fi
-
-call docker start ${cid}
-
 
 # Update container and commit
 if $update; then
-  say "Updating container before attaching session"
-  update_scripts=${TEMPLATES_DIR}/${template}/hooks/update
-  if [ -d "${update_scripts}" ]; then
-    mkdir -p ${tmpdir}/tmp/hooks
-    cp -r ${update_scripts} ${tmpdir}/tmp/hooks/
-
-    call docker exec \
-      --tty \
-      --privileged \
-      ${cid} \
-      /bin/bash /tmp/hooks/update/run.sh
-
-    call docker commit \
-      ${cid} \
-      ${image}
-
-    if $update_only; then
-      call docker stop ${cid}
-      call docker rm ${cid}
-      exit 0
-    fi
-  else
-    say "Update scripts not found, skipping update"
+  say "Running update hooks before attaching session ..."
+  if run_hooks ${cid} update; then
+    commit_changes=true
   fi
+fi
+
+if $commit_changes; then
+  tarfile=$(mktemp)
+  changes=$(awk 'BEGIN{s="\"\""};'\
+'/(CMD|ENTRYPOINT|ENV|EXPOSE|ONBUILD|USER|VOLUME|WORKDIR)/'\
+'{s=s ",\"" $0 "\""};END{print s}' ${TEMPLATES_DIR}/${template}/Dockerfile)
+
+  call docker commit ${cid} ${image}
+  call docker stop ${cid}
+  call docker export -o ${tarfile}.tar.gz ${cid}
+  call docker import --change ${changes} ${tarfile}.tar.gz ${image}
+  call docker rm ${cid}
+
+  create_and_start
+  cid=${RETVAL}
 fi
 
 
