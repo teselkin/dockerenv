@@ -46,6 +46,7 @@ solar
 thrift-devel
 thrift-qt
 uwsgi-plugin-jvm
+uwsgi-plugin-php
 uwsgi-plugin-rpc
 uwsgi-plugin-rrdtool
 wxGTK-devel
