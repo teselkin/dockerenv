@@ -87,7 +87,7 @@ rebuild_local_repo() {
   echo "=== Rebuilding local repo ==="
 
   pushd ${BUILDDIR}/local.repo.d
-  if [ -d repodata ]; then
+  if [[ -d repodata ]]; then
     rm -rf repodata
   fi
   createrepo .
@@ -223,7 +223,7 @@ verify_repo_integrity() {
   unset RETVAL
 
   local repos='--disablerepo=\*'
-  while [ -n "$1" ]; do
+  while [[ -n "$1" ]]; do
     case "$1" in
     -l|--list)
       cat ${2} > ${pkgs}.list
@@ -258,7 +258,7 @@ BEGIN {
 }
 EOF
 
-  if [ ! -f ${pkgs}.list ]; then
+  if [[ ! -f ${pkgs}.list ]]; then
     _repoquery --all --qf="%{name}.%{arch}" ${repos} > ${pkgs}.list
   fi
 
@@ -284,7 +284,7 @@ EOF
     sort -u -o ${pkgs}.broken ${pkgs}.broken
   fi
 
-  if [ $(cat ${pkgs} | wc -l) -gt 0 ]; then
+  if [[ $(cat ${pkgs} | wc -l) -gt 0 ]]; then
     RETVAL=${pkgs}
     return 1
   fi
@@ -301,7 +301,7 @@ mount_iso(){
 
   unset RETVAL
 
-  if [ -z "${iso}" ]; then
+  if [[ -z "${iso}" ]]; then
     die "\$iso not set"
   fi
 
@@ -312,7 +312,7 @@ mount_iso(){
     echo "ISO ${iso} is not mounted"
     iso_mountpoint=${BUILDDIR}/mos-iso
     mkdir -p ${iso_mountpoint}
-    if [ -f ${iso} ]; then
+    if [[ -f ${iso} ]]; then
       sudo mount ${iso} ${iso_mountpoint}
     else
       die "${iso} not found"
@@ -346,7 +346,7 @@ BUILDDIR=$(mktemp -d)
 RELEASE='mos9'
 
 
-while [ -n "$1" ]; do
+while [[ -n "$1" ]]; do
   case "$1" in
     -a|--append)
       append=true
@@ -374,7 +374,7 @@ while [ -n "$1" ]; do
       exit 0
     ;;
     -f|--file)
-      if [ -f "$2" ]; then
+      if [[ -f "$2" ]]; then
         # pre-process file list to remove .rpm suffix, arch from package names
         sed -rn 's/(^|.*[[:space:]])([^[:space:]]+(noarch|x86_64))((\.rpm|[[:space:]]).*|$)/\2/p' ${2} >> ${pkg_list}
       else
@@ -427,10 +427,10 @@ EOF
   ;;
 esac
 
-if [ "${iso}" = 'unset' ]; then
+if [[ "${iso}" = 'unset' ]]; then
   unset iso
 else
-  if [ -f "${iso}" ]; then
+  if [[ -f "${iso}" ]]; then
     iso=$(readlink -e ${iso})
   else
     die "ISO file '${iso}' not found."
@@ -439,7 +439,7 @@ fi
 
 
 mkdir -p ${BUILDDIR}/cache
-if [ ! -d /usr/share/mirantis/${RELEASE}/yum.conf.d ]; then
+if [[ ! -d /usr/share/mirantis/${RELEASE}/yum.conf.d ]]; then
   die "Yum config template '/usr/share/mirantis/${RELEASE}/yum.conf.d' not found"
 fi
 
@@ -452,7 +452,7 @@ EOF
 find ${BUILDDIR}/yum.conf.d/yum.repos.d -name '*.repo' -type f \
   | xargs -I {} sed -i -r -f ${yum_vars_sed} {}
 
-if [ -n "${iso}" ]; then
+if [[ -n "${iso}" ]]; then
   mount_iso ${iso}
 fi
 
@@ -483,14 +483,14 @@ download_packages ${RETVAL}
 rebuild_local_repo
 
 repolist='local mos-os mos-security mos-updates'
-if [ -n "${iso}" ]; then
+if [[ -n "${iso}" ]]; then
   repolist="${repolist} mos-iso"
 fi
 
 repo_broken=1
 pkgs_broken=0
-while [ ${repo_broken} -gt 0 ]; do
-  if [ ${repo_broken} -gt 5 ]; then
+while [[ ${repo_broken} -gt 0 ]]; do
+  if [[ ${repo_broken} -gt 5 ]]; then
     die "Failed to get repositories consistent in 5 iterations"
   fi
   echo '=== Running full repository verification ==='
@@ -501,8 +501,8 @@ while [ ${repo_broken} -gt 0 ]; do
     pkgs_broken=1
   fi
   echo ''
-  while [ ${pkgs_broken} -gt 0 ]; do
-    if [ ${pkgs_broken} -gt 5 ]; then
+  while [[ ${pkgs_broken} -gt 0 ]]; do
+    if [[ ${pkgs_broken} -gt 5 ]]; then
       die "Failed to download missed dependencies in 5 iterations"
     fi
     # Assign RETVAL to pkgs as I need it later to verify broken packages
