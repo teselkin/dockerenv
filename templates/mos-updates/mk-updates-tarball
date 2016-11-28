@@ -382,6 +382,12 @@ while [ -n "$1" ]; do
       fi
       shift
     ;;
+    -F|--file-asis)
+      if [[ -f "$2" ]]; then
+        cat "$2" >> ${pkg_list}
+      fi
+      shift
+    ;;
     *)
       echo $1 >> ${pkg_list}
     ;;
