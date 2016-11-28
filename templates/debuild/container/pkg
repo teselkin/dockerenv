@@ -1,0 +1,193 @@
+#!/bin/bash
+
+GIT_BASE=https://review.fuel-infra.org
+WORKSPACE=${HOME}/workspace
+
+function die() {
+  cat << EOF
+*****
+$@
+*****
+EOF
+  exit 1
+}
+
+function _dget() {
+  local dsc_url=${ARGS[1]}
+  local dsc_name=${dsc_url##*/}
+  dget ${dsc_url}
+  dpkg-source --extract --skip-patches ${dsc_name} builddir
+  popd builddir
+  git init
+  git add -f .
+  git commit -m 'Initial commit'
+  pushd
+}
+
+function _fetch() {
+  local dst=${1:-.}
+  mkdir -p ${WORKSPACE}
+  cd ${WORKSPACE}
+  if [ ! -d "${dst}/.git" ]; then
+    git clone ${GIT_BASE}/${ARGS[1]} ${dst}
+  fi
+  if [ -n "${ARGS[2]}" ]; then
+    local changeset=${ARGS[2]%%,*}
+    local patchset=${ARGS[2]#${changeset}}
+    patchset=${patchset#,}
+    patchset=${patchset:-1}
+    git fetch ${GIT_BASE}/${ARGS[1]} refs/changes/${patchset: -2}/${changeset} && git checkout FETCH_HEAD
+  fi
+  cd ${WORKSPACE}
+}
+
+function _mk_orig() {
+  local target=$(readlink -m ${SOURCEDIR}/../${PACKAGE}_${VERSION})
+
+  if [ -f "${target}.tar.gz" ]; then
+    echo "${target}.tar.gz already exists, skipping tar ..."
+  else
+    pushd ${SOURCEDIR}/..
+    local src=$(ls -a1 | grep -Ev '^(\.|debian$|tests$)')
+    popd
+    tar -czf "${target}.tar.gz" -C ${SOURCEDIR}/.. ${src}
+  fi
+
+  if [ -f "${target}.orig.tar.gz" ]; then
+    echo "${target}.orig.tar.gz already exists, skipping symlinking ..."
+  else
+    ln -s "${target}.tar.gz" "${target}.orig.tar.gz"
+  fi
+}
+
+function _build() {
+  if [ -z "${DEBIANDIR}" ]; then
+    die "Path to debian dir not set."
+  fi
+
+  _mk_orig
+
+  if [ ! -d "${SOURCEDIR}/debian" ]; then
+    cp -r ${DEBIANDIR} ${SOURCEDIR}
+  fi
+
+  pushd ${SOURCEDIR}/..
+  mk-build-deps ${DEBIANDIR}/control
+  dpkg -i *.deb || true
+  apt-get install -f --yes --force-yes
+  dpkg -i *.deb
+  popd
+
+  pushd ${SOURCEDIR}
+  debuild -sa -us -uc -i
+  popd
+}
+
+function _pbuild() {
+  if [ -z "${DEBIANDIR}" ]; then
+    die "Path to debian dir not set."
+  fi
+
+  mk_orig
+
+  if [ ! -d "${SOURCEDIR}/debian" ]; then
+    cp -r ${DEBIANDIR} ${SOURCEDIR}
+  fi
+
+  pushd ${SOURCEDIR}
+  pdebuild --debbuildopts '-sa'
+  popd
+}
+
+function _pbuild_init {
+  local distribution=${KWARGS['distro']:-'xenial'}
+  local mirror='ftp://mirror.yandex.ru/ubuntu/'
+  sudo pbuilder create --distribution "${distribution}" --mirror "${mirror}" --debootstrapopts "--keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+}
+
+function _gbp_ready() {
+  local tmpdir=$(mktemp -d)
+  cp -r . ${tmpdir}
+  git checkout --orphan upstream
+  git rm --cached '*'
+  git clean -fdx
+  local srcdir=$(ls -a -1 ${tmpdir} | grep -E -v '^(\.|debian|tests)')
+  cp -a ${tmpdir}/${srcdir}/. .
+  git add -f .
+  git commit -m "Import ${PROJECT} ${VERSION}"
+  git tag -a "upstream/${VERSION}" -m "${PROJECT} ${VERSION}"
+  git checkout -b debian
+  cp -r ${tmpdir}/debian .
+  git add -f .
+  git commit -m "Import debian specs"
+}
+
+function _upload() {
+  local changes=${ARGS[1]}
+
+  if [ -z "${PROJECT}" ]; then
+    die "Please provide target PROJECT"
+  fi
+
+  if [ -z "${changes}" ]; then
+    changes=$(stat -c '%Y %n' *.changes | sort -r -n | awk '{print $2;exit}')
+  fi
+
+  export PROJECT
+  eval "dupload ${KWARGS['force']:+'--force'} --to ${KWARGS['to']:-mos} ${changes}"
+}
+
+function _apt_link() {
+  test -n "${PROJECT}" || die "PROJECT env variable is empty. Please set or use --project option."
+  test -n "${REPOHOST}" || die "REPOHOST env variable is empty."
+  echo "deb http://${REPOHOST}/repos/${PROJECT} ${PROJECT} main"
+}
+
+declare -a ARGS
+declare -A KWARGS
+while [ -n "$1" ]; do
+  case "$1" in
+    --*)
+      key=${1#--}
+      if [[ ,${key}, =~ ,force, ]]; then
+        KWARGS[${1#--}]=true
+      else
+        KWARGS[${1#--}]=$2
+        shift
+      fi
+    ;;
+    *)
+      ARGS+=("$1")
+    ;; 
+  esac
+  shift
+done
+
+PROJECT=${PROJECT:-${KWARGS['project']}}
+SOURCEDIR=$(readlink -m ${ARGS[1]:-.})
+DEBIANDIR=${SOURCEDIR}
+
+while [ -n "${DEBIANDIR}" ]; do
+  if [ -f "${DEBIANDIR}/debian/control" ]; then
+    DEBIANDIR="${DEBIANDIR}/debian"
+    break
+  fi
+  DEBIANDIR="${DEBIANDIR%/*}"
+done
+
+echo "Source dir = '${SOURCEDIR}'"
+echo "Debian dir = '${DEBIANDIR}'"
+
+if [ -n "${DEBIANDIR}" ]; then
+  PACKAGE=$(dpkg-parsechangelog -l ${DEBIANDIR}/changelog --show-field Source)
+  VERSION=$(dpkg-parsechangelog -l ${DEBIANDIR}/changelog --show-field Version)
+#  VERSION=${VERSION%%+*}
+#  VERSION=${VERSION%%~*}
+  VERSION=${VERSION%-*}
+  VERSION=${VERSION#*:}
+
+  echo "Package name = '${PACKAGE}'"
+  echo "Package version = '${VERSION}'"
+fi
+
+_${ARGS[0]//-/_}

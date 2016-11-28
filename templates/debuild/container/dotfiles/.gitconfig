@@ -1,0 +1,17 @@
+[user]
+	email = mos-linux@mirantis.com
+	name = MOS Linux Team
+
+[core]
+	editor = vim
+
+[alias]
+  co = checkout
+  cp = cherry-pick
+  br = branch
+  st = status
+  cm = commit -m
+  up = fetch --all
+  cr = review
+  cam = commit --amend
+  last = log -1 HEAD

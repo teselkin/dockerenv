@@ -1,0 +1,5 @@
+Host *
+  User reprepro
+  Port 2222
+  UserKnownHostsFile /dev/null
+  StrictHostKeyChecking no

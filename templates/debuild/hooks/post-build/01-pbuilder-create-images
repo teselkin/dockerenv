@@ -1,0 +1,3 @@
+#!/bin/bash
+DIST=trusty pbuilder create
+DIST=xenial pbuilder create
