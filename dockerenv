@@ -169,6 +169,9 @@ while [ -n "$1" ]; do
   esac
 done
 
+if [[ -f "${TEMPLATES_DIR}/${template}/Dockerfile.rc" ]]; then
+  source "${TEMPLATES_DIR}/${template}/Dockerfile.rc"
+fi
 
 build_opts=''
 if ${no_cache}; then
