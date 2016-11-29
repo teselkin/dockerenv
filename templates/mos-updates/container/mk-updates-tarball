@@ -83,6 +83,23 @@ popd() {
 }
 
 
+apply_blacklist() {
+  local ifile="$1"
+  if [[ -f "${ifile}" ]]; then
+    sed -r -i -f ${BLACKLIST}.sed ${ifile}
+    sed -i -r '/^[[:space:]]*$/d' ${ifile}
+  fi
+}
+
+
+merge_lists() {
+  unset RETVAL
+  local ofile=$(mktemp)
+  cat "$@" | sort -u > ${ofile}
+  RETVAL=${ofile}
+}
+
+
 rebuild_local_repo() {
   echo "=== Rebuilding local repo ==="
 
@@ -111,26 +128,47 @@ EOF
 resolve_names() {
   unset RETVAL
 
-  local ifile=$1
   local pkgs=$(mktemp)
   local name
   local pkg_name
+  local s
   local line
+  local result
 
   echo '=== Resolving packages names ==='
 
-  while read name; do
+  if [[ -f "$1" ]]; then
+    cp "${1}" ${pkgs}.in
+  else
+    RETVAL=${pkgs}
+    return
+  fi
+
+  while read line; do
+    name=${line%% *}
     >${pkgs}.1
     repoquery --config ${BUILDDIR}/yum.conf.d/yum.conf \
       --archlist x86_64,noarch --qf '%{nevra}' \
       --whatprovides ${name} > ${pkgs}.1
+    sed -r -i '/^[[:blank:]]*$/d' ${pkgs}.1
+    if [[ $(cat ${pkgs}.1 | wc -l) -eq 0 ]]; then
+      repoquery --config ${BUILDDIR}/yum.conf.d/yum.conf \
+        --archlist x86_64,noarch,i686 --qf '%{nevra}' \
+        --whatprovides ${name} > ${pkgs}.1
+      sed -r -i '/^[[:blank:]]*$/d' ${pkgs}.1
+    fi
     if [[ $(cat ${pkgs}.1 | wc -l) -eq 0 ]]; then
       pkg_name=${name}
       while [[ -n "${pkg_name}" ]]; do
         >${pkgs}.1
         repoquery --config ${BUILDDIR}/yum.conf.d/yum.conf \
-          --archlist x86_64,noarch --qf '%{nevra}' \
-          ${pkg_name} > ${pkgs}.1
+          --archlist x86_64,noarch --qf '%{nevra}' ${pkg_name} > ${pkgs}.1
+        sed -r -i '/^[[:blank:]]*$/d' ${pkgs}.1
+        if [[ $(cat ${pkgs}.1 | wc -l) -eq 0 ]]; then
+          repoquery --config ${BUILDDIR}/yum.conf.d/yum.conf \
+            --archlist x86_64,noarch,i686 --qf '%{nevra}' ${pkg_name} > ${pkgs}.1
+          sed -r -i '/^[[:blank:]]*$/d' ${pkgs}.1
+        fi
         if [[ $(cat ${pkgs}.1 | wc -l) -gt 0 ]]; then
           pkg_name=
         else
@@ -144,18 +182,17 @@ resolve_names() {
     fi
 
     echo " * ${name}"
-    while read line; do
-      echo "  - ${line}"
+    while read s; do
+      echo "  - ${s}"
     done < ${pkgs}.1
 
-    local newest=$(cat ${pkgs}.1 | rpmdev-sort | tail -1)
+    local result=$(cat ${pkgs}.1 | rpmdev-sort | tail -1)
 
-    echo "  ** ${newest}"
-    #cat ${pkgs}.1 >> ${pkgs}
-    echo "${newest}" >> ${pkgs}
+    echo "  ** ${result}"
+    echo "${result}" >> ${pkgs}
+    echo "${result} ${line}" >> ${pkgs}.deplist
 
-  done < ${ifile}
-
+  done < ${pkgs}.in
 
   echo ''
   RETVAL=${pkgs}
@@ -165,7 +202,6 @@ resolve_names() {
 resolve_srpm_packages() {
   unset RETVAL
 
-  local ifile=$1
   local pkgs=$(mktemp)
   local name
   local line
@@ -173,7 +209,8 @@ resolve_srpm_packages() {
 
   echo '=== Resolving packages by SRPM ==='
 
-  repoquery --all --archlist x86_64,noarch --qf '%{sourcerpm} %{nevra}' > ${pkgs}.map
+  cp ${1} ${pkgs}.in
+  repoquery --all --qf '%{sourcerpm} %{nevra}' > ${pkgs}.map
   while read name; do
     >${pkgs}.1
     srpm_name=$(awk -v s=${name} '{if($2==s){print $1;exit}}' ${pkgs}.map)
@@ -182,9 +219,31 @@ resolve_srpm_packages() {
     while read line; do
       echo "  - ${line}"
     done < ${pkgs}.1
-    cat ${pkgs}.1 >> ${pkgs}
-  done < ${ifile}
+    >${pkgs}.2
+    while read line; do
+      if [[ "${line}" =~ \.i686$ ]]; then
+        local s=${line%.i686}
+        if grep -q -E "${s}\.(x86_64|noarch)" ${pkgs}.1; then
+          grep -E "${s}\.(x86_64|noarch)" ${pkgs}.1 >> ${pkgs}.2
+        else
+          echo "${line}" >> ${pkgs}.2
+        fi
+      else
+        echo "${line}" >> ${pkgs}.2
+      fi
+    done < ${pkgs}.1
+    sed -i -r '/-devel[[:space:]\.$-]/d' ${pkgs}.2
+    echo "${name}" >> ${pkgs}.2
+    sort -u -o ${pkgs}.2 ${pkgs}.2
+    while read line; do
+      echo "  + ${line}"
+    done < ${pkgs}.2
+    cat ${pkgs}.2 >> ${pkgs}
+  done < ${pkgs}.in
   sort -u -o ${pkgs} ${pkgs}
+
+  rm ${pkgs}.1
+  rm ${pkgs}.2
 
   echo ''
   RETVAL=${pkgs}
@@ -200,12 +259,11 @@ download_packages() {
   # Do not download devel packages, they are not needed
   #   but resolving dependencies for them dramatically increases
   #   number of packages for download.
-  sed -i -r '/-devel[[:space:]\.$-]/d' ${ifile}
+  #sed -i -r '/-devel[[:space:]\.$-]/d' ${ifile}
 
   while read name; do
     echo "* ${name}"
     yumdownloader --config ${BUILDDIR}/yum.conf.d/yum.conf \
-      --archlist x86_64 --exclude '*i?86' \
       --destdir ${BUILDDIR}/local.repo.d/Packages ${name}
   done < ${ifile}
 
@@ -215,12 +273,12 @@ download_packages() {
 
 
 verify_repo_integrity() {
+  unset RETVAL
+
   local deplist_parser=$(mktemp)
   local list_available_parser=$(mktemp)
   local blacklist=$(mktemp)
   local pkgs=$(mktemp)
-
-  unset RETVAL
 
   local repos='--disablerepo=\*'
   while [[ -n "$1" ]]; do
@@ -252,9 +310,8 @@ BEGIN {
   next
 }
 /Unsatisfied dependency/ {
-  print "Got unsatisfied dependency " n " for package " p " " v
-  print p >> ofile ".broken"
-  print n >> ofile
+  print n " " p "-" v >> ofile ".deplist"
+  printf "."
 }
 EOF
 
@@ -262,22 +319,33 @@ EOF
     _repoquery --all --qf="%{name}.%{arch}" ${repos} > ${pkgs}.list
   fi
 
-  # Generate sed template file from blacklist
-  # Remove blacklisted packages from list of available packages
-  # First of all, ignore devel packages
-  echo '/-devel[[:space:]\.$-]/d' > ${blacklist}.sed
-  if [ -f /usr/share/mirantis/${RELEASE}/blacklist ]; then
-    cat /usr/share/mirantis/${RELEASE}/blacklist > ${blacklist}
-    awk '/^[[:space:]]*#/{next};{print "/^" $0 "\\.(noarch|i.86|x86_64)$/d"}' ${blacklist} >> ${blacklist}.sed
-    sed -r -i -f ${blacklist}.sed ${pkgs}.list
-  fi
+  apply_blacklist ${pkgs}.list
 
   # Find unsatisfied dependencies
   sort -u -o ${pkgs}.list ${pkgs}.list
-  awk '{if(c++ < 100){s=s " " $0}else{print s;c=0;s=""}};END{print s}' ${pkgs}.list > ${pkgs}.longlist
+  awk '{if(c++ < 100){s=s " " $0}else{print s;c=0;s=""}};END{print s}' \
+    ${pkgs}.list > ${pkgs}.chunks
   while read line; do
     _yum ${repos} deplist ${line} | awk -f ${deplist_parser} -v ofile=${pkgs}
-  done < ${pkgs}.longlist
+  done < ${pkgs}.chunks
+  echo ''
+
+  if [[ ! -f "${pkgs}.deplist" ]]; then
+    RETVAL=${pkgs}
+    return
+  fi
+
+  echo ''
+  resolve_names ${pkgs}.deplist
+  apply_blacklist ${RETVAL}.deplist
+  >${pkgs}
+  local f1 f2 f3
+  while read f1 f2 f3; do
+    echo " * ${f3} --> ${f1} (${f2})"
+    echo ${f1} >> ${pkgs}
+    echo ${f3} >> ${pkgs}.broken
+  done < ${RETVAL}.deplist
+  unset RETVAL
 
   sort -u -o ${pkgs} ${pkgs}
   if [ -f ${pkgs}.broken ]; then
@@ -344,12 +412,24 @@ pkg_list=$(mktemp)
 out_file='updates.tar.gz'
 BUILDDIR=$(mktemp -d)
 RELEASE='mos9'
+blacklist_append=''
+blacklist_replace=''
+BLACKLIST=$(mktemp)
+CONFIG_DIR=/container/config
 
 
 while [[ -n "$1" ]]; do
   case "$1" in
     -a|--append)
       append=true
+    ;;
+    -b|--blacklist-append)
+      blacklist_append="$2"
+      shift
+    ;;
+    -B|--blacklist-replace)
+      blacklist_replace="$2"
+      shift
     ;;
     -o|--out-file)
       out_file=$2
@@ -438,12 +518,35 @@ else
 fi
 
 
+# Generate sed template file from blacklist
+# Remove blacklisted packages from list of available packages
+if [[ -z "${blacklist_replace}" ]]; then
+  if [[ -f ${CONFIG_DIR}/${RELEASE}/blacklist ]]; then
+    cat ${CONFIG_DIR}/${RELEASE}/blacklist >> ${BLACKLIST}
+  fi
+else
+  if [[ -f "${blacklist_replace}" ]]; then
+    cat "${blacklist_replace}" >> ${BLACKLIST}
+  fi
+fi
+if [[ -n "${blacklist_append}" ]]; then
+  if [[ -f "${blacklist_append}" ]]; then
+    cat "${blacklist_append}" >> ${BLACKLIST}
+  fi
+fi
+# First of all, ignore devel packages
+echo '/-devel[[:space:]\.$-]/d' > ${BLACKLIST}.sed
+# Convert blacklist to regexp
+awk '/^[[:space:]]*#/{next};{print "/^" $0 "\\.(noarch|i.86|x86_64)$/d"}' \
+  ${BLACKLIST} >> ${BLACKLIST}.sed
+
+
 mkdir -p ${BUILDDIR}/cache
-if [[ ! -d /usr/share/mirantis/${RELEASE}/yum.conf.d ]]; then
-  die "Yum config template '/usr/share/mirantis/${RELEASE}/yum.conf.d' not found"
+if [[ ! -d ${CONFIG_DIR}/${RELEASE}/yum.conf.d ]]; then
+  die "Yum config template '${CONFIG_DIR}/${RELEASE}/yum.conf.d' not found"
 fi
 
-cp -r /usr/share/mirantis/${RELEASE}/yum.conf.d ${BUILDDIR}/
+cp -r ${CONFIG_DIR}/${RELEASE}/yum.conf.d ${BUILDDIR}/
 cat << EOF >> ${BUILDDIR}/yum.conf.d/yum.conf
 cachedir=${BUILDDIR}/cache
 reposdir=${BUILDDIR}/yum.conf.d/yum.repos.d
@@ -478,6 +581,8 @@ echo ''
 resolve_names ${pkg_list}
 if ${resolve_srpm}; then
   resolve_srpm_packages ${RETVAL}
+  apply_blacklist ${RETVAL}
+  merge_lists ${RETVAL} ${RETVAL}.in
 fi
 download_packages ${RETVAL}
 rebuild_local_repo
@@ -507,9 +612,11 @@ while [[ ${repo_broken} -gt 0 ]]; do
     fi
     # Assign RETVAL to pkgs as I need it later to verify broken packages
     pkgs=${RETVAL}
-    resolve_names ${pkgs}
+    #resolve_names ${pkgs}
     if ${resolve_srpm}; then
       resolve_srpm_packages ${RETVAL}
+      apply_blacklist ${RETVAL}
+      merge_lists ${RETVAL} ${RETVAL}.in
     fi
     download_packages ${RETVAL}
     rebuild_local_repo
