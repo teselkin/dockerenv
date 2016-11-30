@@ -167,17 +167,7 @@ resolve_names() {
   while read line; do
     name=${line%% *}
     >${pkgs}.1
-    repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
-      --archlist x86_64,noarch --qf '%{nevra}' \
-      --whatprovides ${name} > ${pkgs}.1
-    sed -r -i '/^[[:blank:]]*$/d' ${pkgs}.1
-    if [[ $(cat ${pkgs}.1 | wc -l) -eq 0 ]]; then
-      repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
-        --archlist x86_64,noarch,i686 --qf '%{nevra}' \
-        --whatprovides ${name} > ${pkgs}.1
-      sed -r -i '/^[[:blank:]]*$/d' ${pkgs}.1
-    fi
-    if [[ $(cat ${pkgs}.1 | wc -l) -eq 0 ]]; then
+    if ! [[ "${name}" =~ [\(\)\/] ]]; then
       pkg_name=${name}
       while [[ -n "${pkg_name}" ]]; do
         >${pkgs}.1
@@ -199,6 +189,18 @@ resolve_names() {
           fi
         fi
       done
+    fi
+    if [[ $(cat ${pkgs}.1 | wc -l) -eq 0 ]]; then
+      repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
+        --archlist x86_64,noarch --qf '%{nevra}' \
+        --whatprovides ${name} > ${pkgs}.1
+      sed -r -i '/^[[:blank:]]*$/d' ${pkgs}.1
+    fi
+    if [[ $(cat ${pkgs}.1 | wc -l) -eq 0 ]]; then
+      repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
+        --archlist x86_64,noarch,i686 --qf '%{nevra}' \
+        --whatprovides ${name} > ${pkgs}.1
+      sed -r -i '/^[[:blank:]]*$/d' ${pkgs}.1
     fi
 
     echo " * ${name}"
