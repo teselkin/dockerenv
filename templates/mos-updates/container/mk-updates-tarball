@@ -100,6 +100,26 @@ merge_lists() {
 }
 
 
+get_upstream_packages() {
+  local ofile="$1"
+  shift
+
+  local repos=
+  while [[ -n "$1" ]]; do
+    repos="${repos} --enablerepo=${1}"
+    shift
+  done
+  if [[ -n "${repos}" ]]; then
+    repos="--disablerepo=* ${repos}"
+  fi
+
+  repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
+    --all --qf '%{name} %{vendor}' ${repos} \
+    | awk 'BEGIN{IGNORECASE=1};/ (centos$|fedora|red hat)/{print $1}' \
+    > ${ofile}
+}
+
+
 rebuild_local_repo() {
   echo "=== Rebuilding local repo ==="
 
@@ -147,12 +167,12 @@ resolve_names() {
   while read line; do
     name=${line%% *}
     >${pkgs}.1
-    repoquery --config ${BUILDDIR}/yum.conf.d/yum.conf \
+    repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
       --archlist x86_64,noarch --qf '%{nevra}' \
       --whatprovides ${name} > ${pkgs}.1
     sed -r -i '/^[[:blank:]]*$/d' ${pkgs}.1
     if [[ $(cat ${pkgs}.1 | wc -l) -eq 0 ]]; then
-      repoquery --config ${BUILDDIR}/yum.conf.d/yum.conf \
+      repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
         --archlist x86_64,noarch,i686 --qf '%{nevra}' \
         --whatprovides ${name} > ${pkgs}.1
       sed -r -i '/^[[:blank:]]*$/d' ${pkgs}.1
@@ -161,11 +181,11 @@ resolve_names() {
       pkg_name=${name}
       while [[ -n "${pkg_name}" ]]; do
         >${pkgs}.1
-        repoquery --config ${BUILDDIR}/yum.conf.d/yum.conf \
+        repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
           --archlist x86_64,noarch --qf '%{nevra}' ${pkg_name} > ${pkgs}.1
         sed -r -i '/^[[:blank:]]*$/d' ${pkgs}.1
         if [[ $(cat ${pkgs}.1 | wc -l) -eq 0 ]]; then
-          repoquery --config ${BUILDDIR}/yum.conf.d/yum.conf \
+          repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
             --archlist x86_64,noarch,i686 --qf '%{nevra}' ${pkg_name} > ${pkgs}.1
           sed -r -i '/^[[:blank:]]*$/d' ${pkgs}.1
         fi
@@ -280,7 +300,7 @@ verify_repo_integrity() {
   local blacklist=$(mktemp)
   local pkgs=$(mktemp)
 
-  local repos='--disablerepo=\*'
+  local repos=
   while [[ -n "$1" ]]; do
     case "$1" in
     -l|--list)
@@ -293,6 +313,10 @@ verify_repo_integrity() {
     esac
     shift
   done
+
+  if [[ -n "${repos}" ]]; then
+    repos="--disablerepo=* ${repos}"
+  fi
 
   cat << "EOF" > ${deplist_parser}
 BEGIN {
@@ -316,7 +340,8 @@ BEGIN {
 EOF
 
   if [[ ! -f ${pkgs}.list ]]; then
-    _repoquery --all --qf="%{name}.%{arch}" ${repos} > ${pkgs}.list
+    repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
+      --all --qf="%{name}.%{arch}" ${repos} > ${pkgs}.list
   fi
 
   apply_blacklist ${pkgs}.list
@@ -328,13 +353,13 @@ EOF
   while read line; do
     _yum ${repos} deplist ${line} | awk -f ${deplist_parser} -v ofile=${pkgs}
   done < ${pkgs}.chunks
-  echo ''
 
   if [[ ! -f "${pkgs}.deplist" ]]; then
     RETVAL=${pkgs}
     return
   fi
 
+  echo ''
   echo ''
   resolve_names ${pkgs}.deplist
   apply_blacklist ${RETVAL}.deplist
@@ -416,12 +441,16 @@ blacklist_append=''
 blacklist_replace=''
 BLACKLIST=$(mktemp)
 CONFIG_DIR=/container/config
+mode_auto=false
 
 
 while [[ -n "$1" ]]; do
   case "$1" in
     -a|--append)
       append=true
+    ;;
+    -A|--auto)
+      mode_auto=true
     ;;
     -b|--blacklist-append)
       blacklist_append="$2"
@@ -474,7 +503,6 @@ while [[ -n "$1" ]]; do
   esac
   shift
 done
-
 
 out_file=$(readlink -m ${out_file})
 yum_vars_sed=$(mktemp)
@@ -559,13 +587,16 @@ if [[ -n "${iso}" ]]; then
   mount_iso ${iso}
 fi
 
+
 echo "=== Updating yum metadata ==="
 CMDPREFIX='sudo' _yum makecache
 echo ''
 
+
 echo "=== List available yum repositories ==="
 _yum repolist
 echo ''
+
 
 echo "=== Creating rpm repository ==="
 echo "Repo path: ${BUILDDIR}/local.repo.d"
@@ -576,6 +607,19 @@ if $append && [ -f ${out_file} ]; then
 fi
 echo "Done"
 echo ''
+rebuild_local_repo
+
+
+repolist='local mos-os mos-security mos-updates'
+if [[ -n "${iso}" ]]; then
+  repolist="${repolist} mos-iso"
+fi
+
+
+if ${mode_auto}; then
+  get_upstream_packages ${pkg_list} ${repolist}
+fi
+
 
 # Set RETVAL to pkg_list since no function returned RETVAL yet
 resolve_names ${pkg_list}
@@ -586,11 +630,6 @@ if ${resolve_srpm}; then
 fi
 download_packages ${RETVAL}
 rebuild_local_repo
-
-repolist='local mos-os mos-security mos-updates'
-if [[ -n "${iso}" ]]; then
-  repolist="${repolist} mos-iso"
-fi
 
 repo_broken=1
 pkgs_broken=0
