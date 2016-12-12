@@ -113,10 +113,16 @@ get_upstream_packages() {
     repos="--disablerepo=* ${repos}"
   fi
 
+  >${ofile}
   repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
     --all --qf '%{name} %{vendor}' ${repos} \
     | awk 'BEGIN{IGNORECASE=1};/ (centos$|fedora|red hat)/{print $1}' \
-    > ${ofile}
+    >> ${ofile}
+  repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
+    --all --qf '%{name} %{buildhost}' ${repos} \
+    | awk '$2 ~/centos\.org/{print $1}' \
+    >> ${ofile}
+  sort -u -o ${ofile} ${ofile}
 }
 
 
