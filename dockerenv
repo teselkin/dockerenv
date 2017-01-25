@@ -257,6 +257,7 @@ if $commit_changes; then
   changes=$(awk 'BEGIN{s="\"\""};'\
 '/(CMD|ENTRYPOINT|ENV|EXPOSE|ONBUILD|USER|VOLUME|WORKDIR)/'\
 '{s=s ",\"" $0 "\""};END{print s}' ${TEMPLATES_DIR}/${template}/Dockerfile)
+  changes=${changes#'"",'}
 
   call docker commit ${cid} ${image}
   call docker stop ${cid}
