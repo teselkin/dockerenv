@@ -1,0 +1,8 @@
+Host mos-linux-repo
+  HostName 172.18.170.22
+  User reprepro
+  Port 2222
+  UserKnownHostsFile /dev/null
+  StrictHostKeyChecking no
+  IdentityFile /etc/ssh/mos-linux-repo.id_rsa
+

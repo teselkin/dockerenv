@@ -85,6 +85,7 @@ elif $(echo ${UBUNTU_SUITES[@]} | grep -q $DIST); then
     MIRRORSITE="http://$UBUNTU_MIRROR/ubuntu/"
     COMPONENTS="main restricted universe multiverse"
     DEBOOTSTRAPOPTS=("${DEBOOTSTRAPOPTS[@]}" "--keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg")
+    OTHERMIRROR="deb ${MIRRORSITE} ${DIST}-updates ${COMPONENTS}|deb ${MIRRORSITE} ${DIST}-security ${COMPONENTS}"
 #    OTHERMIRROR="deb file:///var/cache/archive $DIST/"
 else
     echo "Unknown distribution: $DIST"

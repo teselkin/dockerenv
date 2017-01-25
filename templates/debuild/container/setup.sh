@@ -46,6 +46,13 @@ echo "BUILDUSERNAME=${username}" >> /home/${username}/.pbuilderrc
 # Fix permissions
 #chown -R ${username}:${username} /home/${username}
 
-#pbuilder --create \
-#  --distribution trusty \
-#  --mirror http://mirror.yandex.ru/ubuntu
+# Setup dupload
+# =============
+pushd /container/dupload
+cp dupload.conf /etc
+cp mos-linux-repo.id_rsa /etc/ssh
+cat ssh_config >> /etc/ssh/ssh_config
+popd
+
+
+
