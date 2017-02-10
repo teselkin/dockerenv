@@ -16,7 +16,7 @@ ADD container /container
 RUN chmod +x /container/*.sh
 RUN /container/setup.sh
 
-#RUN echo 7.1.1503 > /etc/yum/vars/vaultver
+RUN echo 7.2.1511 > /etc/yum/vars/vaultver
 #RUN mkdir /usr/share/mirantis
 #ADD mirantis /usr/share/mirantis
 #ADD mk-updates-tarball /usr/local/sbin/

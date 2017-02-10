@@ -238,7 +238,8 @@ resolve_srpm_packages() {
   echo '=== Resolving packages by SRPM ==='
 
   cp ${1} ${pkgs}.in
-  repoquery --all --qf '%{sourcerpm} %{nevra}' > ${pkgs}.map
+  repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
+    --all --qf '%{sourcerpm} %{nevra}' > ${pkgs}.map
   while read name; do
     >${pkgs}.1
     srpm_name=$(awk -v s=${name} '{if($2==s){print $1;exit}}' ${pkgs}.map)
@@ -250,7 +251,7 @@ resolve_srpm_packages() {
     >${pkgs}.2
     while read line; do
       if [[ "${line}" =~ \.i686$ ]]; then
-        local s=${line%.i686}
+        local s=$(echo ${line%.i686} | sed 's/\([()+]\)/\\\1/g')
         if grep -q -E "${s}\.(x86_64|noarch)" ${pkgs}.1; then
           grep -E "${s}\.(x86_64|noarch)" ${pkgs}.1 >> ${pkgs}.2
         else
