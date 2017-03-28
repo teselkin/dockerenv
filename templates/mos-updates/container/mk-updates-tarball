@@ -292,6 +292,10 @@ download_packages() {
 
   while read name; do
     echo "* ${name}"
+    repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
+      --qf '%{repoid} %{nevra}' ${name}
+    yumdownloader --config ${BUILDDIR}/yum.conf.d/yum.conf \
+      --destdir ${BUILDDIR}/local.repo.d/Packages --urls ${name}
     yumdownloader --config ${BUILDDIR}/yum.conf.d/yum.conf \
       --destdir ${BUILDDIR}/local.repo.d/Packages ${name}
   done < ${ifile}
@@ -491,18 +495,20 @@ while [[ -n "$1" ]]; do
       usage
       exit 0
     ;;
+    -l|--list)
+      if [[ -f "$2" ]]; then
+        cat "$2" >> ${pkg_list}
+      else
+        die "File not found '$2'"
+      fi
+      shift
+    ;;
     -f|--file)
       if [[ -f "$2" ]]; then
         # pre-process file list to remove .rpm suffix, arch from package names
         sed -rn 's/(^|.*[[:space:]])([^[:space:]]+(noarch|x86_64))((\.rpm|[[:space:]]).*|$)/\2/p' ${2} >> ${pkg_list}
       else
         die "File not found '$2'"
-      fi
-      shift
-    ;;
-    -F|--file-asis)
-      if [[ -f "$2" ]]; then
-        cat "$2" >> ${pkg_list}
       fi
       shift
     ;;
