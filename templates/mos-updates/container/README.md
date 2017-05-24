@@ -1,6 +1,6 @@
 # mk-updates-tarball
 
-mk-updates-tarball generates a compressed rpm repository with packages
+`mk-updates-tarball` generates a compressed rpm repository with packages
 fetched from upstream CentOS mirrors that are newer then packages available
 in MOS repositories.
 
