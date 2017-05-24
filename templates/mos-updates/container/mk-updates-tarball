@@ -175,7 +175,7 @@ get_updated_packages() {
   shift 2
 
   cat ${upstream_pkgs} > ${pkgs}.upstream
-  apply_blacklist ${pkgs}.upstream name
+  apply_blacklist ${pkgs}.upstream devel name
 
   local repoid=
   local no_upstream_repos=
