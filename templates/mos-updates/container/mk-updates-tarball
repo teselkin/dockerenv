@@ -126,6 +126,50 @@ get_upstream_packages() {
 }
 
 
+get_updated_packages() {
+  local upstream_pkgs="$1"
+  local pkgs="$2"
+  shift 2
+
+  cat ${upstream_pkgs} > ${pkgs}.upstream
+
+  local repoid=
+  local no_upstream_repos=
+  for repoid in base updates extras; do
+    no_upstream_repos="--disablerepo=${repoid} ${no_upstream_repos}"
+  done
+
+  >${pkgs}.mos
+  while read name; do
+    echo "${name}"
+    >${pkgs}.1
+    repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
+      --show-duplicates \
+      --qf '%{name} %{nevra} %{repoid}' ${name} > ${pkgs}.1
+    while read line; do
+      echo " - ${line}"
+    done < ${pkgs}.1
+    latest=$(cat ${pkgs}.1 | awk '{print $2}' | rpmdev-sort | tail -1)
+    echo " * ${latest}"
+    update_pkg=true
+    cat ${pkgs}.1 \
+    | awk -v v=${latest} '{if (v == $2){print $3}}' \
+    | while read repoid; do
+      if [[ "${repoid}" =~ ^(mos\-.*|local)$ ]]; then
+        update_pkg=false
+      fi
+    done
+    if ${update_pkg}; then
+      cat ${pkgs}.1 | awk -v v=${latest} '{if (v == $2){print $1;exit}}' >> ${pkgs}
+    fi
+    echo ""
+  done < ${pkgs}.upstream
+
+  apply_blacklist ${pkgs}
+  cat ${pkgs}
+}
+
+
 rebuild_local_repo() {
   echo "=== Rebuilding local repo ==="
 
@@ -632,7 +676,8 @@ fi
 
 
 if ${mode_auto}; then
-  get_upstream_packages ${pkg_list} ${repolist}
+  get_upstream_packages ${pkg_list}.tmp ${repolist}
+  get_updated_packages ${pkg_list}.tmp ${pkg_list}
 fi
 
 
