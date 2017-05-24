@@ -209,8 +209,6 @@ get_updated_packages() {
     fi
     echo ""
   done < ${pkgs}.upstream
-
-  cat ${pkgs}
 }
 
 
