@@ -85,10 +85,53 @@ popd() {
 
 apply_blacklist() {
   local ifile="$1"
+  shift
+
+  for name in $@; do
+    if [[ ! -f "${BLACKLIST}.${name}.sed" ]]; then
+      build_blacklist
+    fi
+  done
+
   if [[ -f "${ifile}" ]]; then
-    sed -r -i -f ${BLACKLIST}.sed ${ifile}
+    # Drop empty lines
     sed -i -r '/^[[:space:]]*$/d' ${ifile}
+    # Apply blacklists
+    for name in $@; do
+      sed -r -i -f "${BLACKLIST}.${name}.sed" ${ifile}
+    done
   fi
+}
+
+
+build_blacklist() {
+  # Generate sed template file from blacklist
+  # Remove blacklisted packages from list of available packages
+  if [[ -z "${blacklist_replace}" ]]; then
+    if [[ -f ${CONFIG_DIR}/${RELEASE}/blacklist ]]; then
+      cat ${CONFIG_DIR}/${RELEASE}/blacklist >> ${BLACKLIST}
+    fi
+  else
+    if [[ -f "${blacklist_replace}" ]]; then
+      cat "${blacklist_replace}" >> ${BLACKLIST}
+    fi
+  fi
+  if [[ -n "${blacklist_append}" ]]; then
+    if [[ -f "${blacklist_append}" ]]; then
+      cat "${blacklist_append}" >> ${BLACKLIST}
+    fi
+  fi
+
+  # First of all, ignore devel packages
+  echo '/-devel[[:space:]\.$-]/d' > ${BLACKLIST}.devel.sed
+
+  # Convert blacklist to regexp (name only)
+  awk '/^[[:space:]]*#/{next};{print "/^" $0 "$/d"}' \
+    ${BLACKLIST} > ${BLACKLIST}.name.sed
+
+  # Convert blacklist to regexp (name and arch)
+  awk '/^[[:space:]]*#/{next};{print "/^" $0 "\\.(noarch|i.86|x86_64)$/d"}' \
+    ${BLACKLIST} > ${BLACKLIST}.name_arch.sed
 }
 
 
@@ -132,6 +175,7 @@ get_updated_packages() {
   shift 2
 
   cat ${upstream_pkgs} > ${pkgs}.upstream
+  apply_blacklist ${pkgs}.upstream name
 
   local repoid=
   local no_upstream_repos=
@@ -166,7 +210,6 @@ get_updated_packages() {
     echo ""
   done < ${pkgs}.upstream
 
-  apply_blacklist ${pkgs}
   cat ${pkgs}
 }
 
@@ -402,7 +445,7 @@ EOF
       --all --qf="%{name}.%{arch}" ${repos} > ${pkgs}.list
   fi
 
-  apply_blacklist ${pkgs}.list
+  apply_blacklist ${pkgs}.list devel name_arch
 
   # Find unsatisfied dependencies
   sort -u -o ${pkgs}.list ${pkgs}.list
@@ -420,7 +463,7 @@ EOF
   echo ''
   echo ''
   resolve_names ${pkgs}.deplist
-  apply_blacklist ${RETVAL}.deplist
+  apply_blacklist ${RETVAL}.deplist devel name_arch
   >${pkgs}
   local f1 f2 f3
   while read f1 f2 f3; do
@@ -606,29 +649,6 @@ else
 fi
 
 
-# Generate sed template file from blacklist
-# Remove blacklisted packages from list of available packages
-if [[ -z "${blacklist_replace}" ]]; then
-  if [[ -f ${CONFIG_DIR}/${RELEASE}/blacklist ]]; then
-    cat ${CONFIG_DIR}/${RELEASE}/blacklist >> ${BLACKLIST}
-  fi
-else
-  if [[ -f "${blacklist_replace}" ]]; then
-    cat "${blacklist_replace}" >> ${BLACKLIST}
-  fi
-fi
-if [[ -n "${blacklist_append}" ]]; then
-  if [[ -f "${blacklist_append}" ]]; then
-    cat "${blacklist_append}" >> ${BLACKLIST}
-  fi
-fi
-# First of all, ignore devel packages
-echo '/-devel[[:space:]\.$-]/d' > ${BLACKLIST}.sed
-# Convert blacklist to regexp
-awk '/^[[:space:]]*#/{next};{print "/^" $0 "\\.(noarch|i.86|x86_64)$/d"}' \
-  ${BLACKLIST} >> ${BLACKLIST}.sed
-
-
 mkdir -p ${BUILDDIR}/cache
 if [[ ! -d ${CONFIG_DIR}/${RELEASE}/yum.conf.d ]]; then
   die "Yum config template '${CONFIG_DIR}/${RELEASE}/yum.conf.d' not found"
@@ -686,7 +706,7 @@ fi
 resolve_names ${pkg_list}
 if ${resolve_srpm}; then
   resolve_srpm_packages ${RETVAL}
-  apply_blacklist ${RETVAL}
+  apply_blacklist ${RETVAL} devel name_arch
   merge_lists ${RETVAL} ${RETVAL}.in
 fi
 download_packages ${RETVAL}
@@ -715,7 +735,7 @@ while [[ ${repo_broken} -gt 0 ]]; do
     #resolve_names ${pkgs}
     if ${resolve_srpm}; then
       resolve_srpm_packages ${RETVAL}
-      apply_blacklist ${RETVAL}
+      apply_blacklist ${RETVAL} devel name_arch
       merge_lists ${RETVAL} ${RETVAL}.in
     fi
     download_packages ${RETVAL}
