@@ -1,5 +1,6 @@
 apr-util-devel
 augeas-devel
+centos-release
 ceph-fuse
 ceph-test
 cephfs-java
@@ -72,5 +73,6 @@ subscription-manager-firstboot
 subscription-manager-gui
 syslinux-perl
 v8
+xorg-x11-drv-ati-firmware
 wxGTK-devel
 wxGTK-media
