@@ -123,7 +123,7 @@ build_blacklist() {
   fi
 
   # First of all, ignore devel packages
-  echo '/-devel[[:space:]\.$-]/d' > ${BLACKLIST}.devel.sed
+  echo '/-devel[[:space:]\.-]?/d' > ${BLACKLIST}.devel.sed
 
   # Convert blacklist to regexp (name only)
   awk '/^[[:space:]]*#/{next};{print "/^" $0 "$/d"}' \
@@ -347,7 +347,7 @@ resolve_srpm_packages() {
         echo "${line}" >> ${pkgs}.2
       fi
     done < ${pkgs}.1
-    sed -i -r '/-devel[[:space:]\.$-]/d' ${pkgs}.2
+    sed -i -r '/-devel[[:space:]\.-]?/d' ${pkgs}.2
     echo "${name}" >> ${pkgs}.2
     sort -u -o ${pkgs}.2 ${pkgs}.2
     while read line; do
