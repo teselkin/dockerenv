@@ -159,6 +159,7 @@ get_updated_packages() {
         update_pkg=false
       fi
     done
+    echo " ** Update: ${update_pkg}"
     if ${update_pkg}; then
       cat ${pkgs}.1 | awk -v v=${latest} '{if (v == $2){print $1;exit}}' >> ${pkgs}
     fi
