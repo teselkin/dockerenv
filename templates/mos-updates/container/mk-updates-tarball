@@ -15,7 +15,8 @@ else
 fi
 
 cleanup(){
-  sudo umount ${BUILDDIR}/mos-iso || true
+  sudo umount ${BUILDDIR}/mnt/iso || true
+  chroot_destroy || true
 }
 trap cleanup EXIT
 
@@ -63,16 +64,6 @@ say(){
 }
 
 
-_yum() {
-  eval "${CMDPREFIX} yum -c ${BUILDDIR}/yum.conf.d/yum.conf $@"
-}
-
-
-_repoquery() {
-  eval "repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf $@"
-}
-
-
 pushd() {
   command pushd "$@" > /dev/null
 }
@@ -80,6 +71,35 @@ pushd() {
 
 popd() {
   command popd "$@" > /dev/null
+}
+
+
+chroot_setup() {
+  mkdir -p ${BUILDDIR}/etc
+  rpm --rebuilddb --root=${BUILDDIR}
+  sudo yum --installroot=${BUILDDIR} \
+    --config=${BUILDDIR}/tmp/yum.conf.d/yum.conf \
+    --nogpgcheck \
+    install -y centos-release yum yum-utils
+  sudo mount --bind /proc ${BUILDDIR}/proc
+  sudo mount --bind /dev ${BUILDDIR}/dev
+  sudo cp /etc/resolv.conf ${BUILDDIR}/etc/resolv.conf
+
+  sudo rm ${BUILDDIR}/var/lib/rpm/__db* || true
+  chroot_cmd rpm --rebuilddb
+  #chroot_cmd yum update -y
+}
+
+
+chroot_cmd() {
+  sudo chroot ${BUILDDIR} "$@"
+}
+
+
+chroot_destroy() {
+  mount | grep "${BUILDDIR}" | cut -d' ' -f3 \
+    | xargs -I {} sudo umount {}
+  #rm -rf ${BUILDDIR}
 }
 
 
@@ -98,6 +118,9 @@ apply_blacklist() {
     sed -i -r '/^[[:space:]]*$/d' ${ifile}
     # Apply blacklists
     for name in $@; do
+      if [[ "${name}" == 'devel' ]]; then
+        continue
+      fi
       sed -r -i -f "${BLACKLIST}.${name}.sed" ${ifile}
     done
   fi
@@ -123,7 +146,10 @@ build_blacklist() {
   fi
 
   # First of all, ignore devel packages
-  echo '/-devel[[:space:]\.-]?/d' > ${BLACKLIST}.devel.sed
+  cat << EOF > ${BLACKLIST}.devel.sed
+/-devel[[:space:]\.-]/d
+/-devel$/d
+EOF
 
   # Convert blacklist to regexp (name only)
   awk '/^[[:space:]]*#/{next};{print "/^" $0 "$/d"}' \
@@ -157,12 +183,10 @@ get_upstream_packages() {
   fi
 
   >${ofile}
-  repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
-    --all --qf '%{name} %{vendor}' ${repos} \
+  chroot_cmd repoquery --all --qf '%{name} %{vendor}' ${repos} \
     | awk 'BEGIN{IGNORECASE=1};/ (centos$|fedora|red hat)/{print $1}' \
     >> ${ofile}
-  repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
-    --all --qf '%{name} %{buildhost}' ${repos} \
+  chroot_cmd repoquery --all --qf '%{name} %{buildhost}' ${repos} \
     | awk '$2 ~/centos\.org/{print $1}' \
     >> ${ofile}
   sort -u -o ${ofile} ${ofile}
@@ -187,8 +211,7 @@ get_updated_packages() {
   while read name; do
     echo "${name}"
     >${pkgs}.1
-    repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
-      --show-duplicates \
+    chroot_cmd repoquery --show-duplicates \
       --qf '%{name} %{nevra} %{repoid}' ${name} > ${pkgs}.1
     while read line; do
       echo " - ${line}"
@@ -215,23 +238,24 @@ get_updated_packages() {
 rebuild_local_repo() {
   echo "=== Rebuilding local repo ==="
 
-  pushd ${BUILDDIR}/local.repo.d
+  pushd ${BUILDDIR}/tmp/local.repo.d
   if [[ -d repodata ]]; then
     rm -rf repodata
   fi
   createrepo .
   popd
 
-  cat << EOF > ${BUILDDIR}/yum.conf.d/yum.repos.d/local.repo
+  cat << EOF | sudo tee ${BUILDDIR}/etc/yum.repos.d/local.repo
 [local]
 name=Local Repo
-baseurl=file://${BUILDDIR}/local.repo.d
+baseurl=file:///tmp/local.repo.d
 enabled=1
 gpgcheck=0
 EOF
 
-  CMDPREFIX='sudo' _yum makecache #2>&1 > /dev/null
+#  CMDPREFIX='sudo' _yum makecache #2>&1 > /dev/null
 #  _yum repolist
+  chroot_cmd yum makecache
   echo 'Done'
   echo ''
 }
@@ -246,6 +270,7 @@ resolve_names() {
   local s
   local line
   local result
+  local last_name
 
   echo '=== Resolving packages names ==='
 
@@ -256,52 +281,54 @@ resolve_names() {
     return
   fi
 
+  last_name=""
   while read line; do
     name=${line%% *}
-    >${pkgs}.1
-    if ! [[ "${name}" =~ [\(\)\/] ]]; then
-      pkg_name=${name}
-      while [[ -n "${pkg_name}" ]]; do
-        >${pkgs}.1
-        repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
-          --archlist x86_64,noarch --qf '%{nevra}' ${pkg_name} > ${pkgs}.1
-        sed -r -i '/^[[:blank:]]*$/d' ${pkgs}.1
-        if [[ $(cat ${pkgs}.1 | wc -l) -eq 0 ]]; then
-          repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
-            --archlist x86_64,noarch,i686 --qf '%{nevra}' ${pkg_name} > ${pkgs}.1
+    if [[ "${name}" != "${last_name}" ]]; then
+      last_name=${name}
+      >${pkgs}.1
+      if ! [[ "${name}" =~ [\(\)\/] ]]; then
+        pkg_name=${name}
+        while [[ -n "${pkg_name}" ]]; do
+          >${pkgs}.1
+          chroot_cmd repoquery --archlist x86_64,noarch \
+            --qf '%{nevra}' ${pkg_name} > ${pkgs}.1
           sed -r -i '/^[[:blank:]]*$/d' ${pkgs}.1
-        fi
-        if [[ $(cat ${pkgs}.1 | wc -l) -gt 0 ]]; then
-          pkg_name=
-        else
-          if [[ "${pkg_name}" =~ \. ]]; then
-            pkg_name=${pkg_name%.*}
-          else
-            pkg_name=
+          if [[ $(cat ${pkgs}.1 | wc -l) -eq 0 ]]; then
+            chroot_cmd repoquery --archlist x86_64,noarch,i686 \
+              --qf '%{nevra}' ${pkg_name} > ${pkgs}.1
+            sed -r -i '/^[[:blank:]]*$/d' ${pkgs}.1
           fi
-        fi
-      done
-    fi
-    if [[ $(cat ${pkgs}.1 | wc -l) -eq 0 ]]; then
-      repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
-        --archlist x86_64,noarch --qf '%{nevra}' \
-        --whatprovides ${name} > ${pkgs}.1
-      sed -r -i '/^[[:blank:]]*$/d' ${pkgs}.1
-    fi
-    if [[ $(cat ${pkgs}.1 | wc -l) -eq 0 ]]; then
-      repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
-        --archlist x86_64,noarch,i686 --qf '%{nevra}' \
-        --whatprovides ${name} > ${pkgs}.1
-      sed -r -i '/^[[:blank:]]*$/d' ${pkgs}.1
+          if [[ $(cat ${pkgs}.1 | wc -l) -gt 0 ]]; then
+            pkg_name=
+          else
+            if [[ "${pkg_name}" =~ \. ]]; then
+              pkg_name=${pkg_name%.*}
+            else
+              pkg_name=
+            fi
+          fi
+        done
+      fi
+      if [[ $(cat ${pkgs}.1 | wc -l) -eq 0 ]]; then
+        chroot_cmd repoquery --archlist x86_64,noarch \
+          --qf '%{nevra}' --whatprovides ${name} > ${pkgs}.1
+        sed -r -i '/^[[:blank:]]*$/d' ${pkgs}.1
+      fi
+      if [[ $(cat ${pkgs}.1 | wc -l) -eq 0 ]]; then
+        chroot_cmd repoquery --archlist x86_64,noarch,i686 \
+          --qf '%{nevra}' --whatprovides ${name} > ${pkgs}.1
+        sed -r -i '/^[[:blank:]]*$/d' ${pkgs}.1
+      fi
+  
+      local result=$(cat ${pkgs}.1 | rpmdev-sort | tail -1)
     fi
 
     echo " * ${name}"
     while read s; do
       echo "  - ${s}"
     done < ${pkgs}.1
-
-    local result=$(cat ${pkgs}.1 | rpmdev-sort | tail -1)
-
+  
     echo "  ** ${result}"
     echo "${result}" >> ${pkgs}
     echo "${result} ${line}" >> ${pkgs}.deplist
@@ -324,8 +351,7 @@ resolve_srpm_packages() {
   echo '=== Resolving packages by SRPM ==='
 
   cp ${1} ${pkgs}.in
-  repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
-    --all --qf '%{sourcerpm} %{nevra}' > ${pkgs}.map
+  chroot_cmd repoquery --all --qf '%{sourcerpm} %{nevra}' > ${pkgs}.map
   while read name; do
     >${pkgs}.1
     srpm_name=$(awk -v s=${name} '{if($2==s){print $1;exit}}' ${pkgs}.map)
@@ -347,7 +373,8 @@ resolve_srpm_packages() {
         echo "${line}" >> ${pkgs}.2
       fi
     done < ${pkgs}.1
-    sed -i -r '/-devel[[:space:]\.-]?/d' ${pkgs}.2
+    apply_blacklist ${pkgs}.2 devel
+    #sed -i -r '/-devel[[:space:]\.-]?/d' ${pkgs}.2
     echo "${name}" >> ${pkgs}.2
     sort -u -o ${pkgs}.2 ${pkgs}.2
     while read line; do
@@ -378,12 +405,9 @@ download_packages() {
 
   while read name; do
     echo "* ${name}"
-    repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
-      --qf '%{repoid} %{nevra}' ${name}
-    yumdownloader --config ${BUILDDIR}/yum.conf.d/yum.conf \
-      --destdir ${BUILDDIR}/local.repo.d/Packages --urls ${name}
-    yumdownloader --config ${BUILDDIR}/yum.conf.d/yum.conf \
-      --destdir ${BUILDDIR}/local.repo.d/Packages ${name}
+    chroot_cmd repoquery --qf '%{repoid} %{nevra}' ${name}
+    chroot_cmd yumdownloader --destdir /tmp/local.repo.d/Packages --urls ${name}
+    chroot_cmd yumdownloader --destdir /tmp/local.repo.d/Packages ${name}
   done < ${ifile}
 
   echo 'Done'
@@ -439,8 +463,7 @@ BEGIN {
 EOF
 
   if [[ ! -f ${pkgs}.list ]]; then
-    repoquery -c ${BUILDDIR}/yum.conf.d/yum.conf \
-      --all --qf="%{name}.%{arch}" ${repos} > ${pkgs}.list
+    chroot_cmd repoquery --all --qf="%{name}.%{arch}" ${repos} > ${pkgs}.list
   fi
 
   apply_blacklist ${pkgs}.list devel name_arch
@@ -450,7 +473,7 @@ EOF
   awk '{if(c++ < 100){s=s " " $0}else{print s;c=0;s=""}};END{print s}' \
     ${pkgs}.list > ${pkgs}.chunks
   while read line; do
-    _yum ${repos} deplist ${line} | awk -f ${deplist_parser} -v ofile=${pkgs}
+    chroot_cmd yum ${repos} deplist ${line} | awk -f ${deplist_parser} -v ofile=${pkgs}
   done < ${pkgs}.chunks
 
   if [[ ! -f "${pkgs}.deplist" ]]; then
@@ -460,6 +483,7 @@ EOF
 
   echo ''
   echo ''
+  sort -u -o ${pkgs}.deplist ${pkgs}.deplist
   resolve_names ${pkgs}.deplist
   apply_blacklist ${RETVAL}.deplist devel name_arch
   >${pkgs}
@@ -488,6 +512,174 @@ EOF
 }
 
 
+install_test() {
+  unset RETVAL
+
+  local get_latest_packages=$(mktemp)
+  local python_parser=$(mktemp)
+  local list_available_parser=$(mktemp)
+  local blacklist=$(mktemp)
+  local pkgs=$(mktemp)
+
+  local repos=
+  while [[ -n "$1" ]]; do
+    case "$1" in
+    -l|--list)
+      cat ${2} > ${pkgs}.list
+      shift
+    ;;
+    *)
+      repos="${repos} --enablerepo=${1}"
+    ;;
+    esac
+    shift
+  done
+
+  if [[ -n "${repos}" ]]; then
+    repos="--disablerepo=* ${repos}"
+  fi
+
+  cat << "EOF" > ${get_latest_packages}
+$2 ~ /(local|mos-.*)/ {
+  print $1 >> ofile ".mos"
+  next
+}
+// {
+  print $1 >> ofile ".centos"
+  next
+}
+EOF
+
+  cat << 'EOF' > ${python_parser}
+from rpmUtils.miscutils import splitFilename
+import re
+import sys
+re_error_package = re.compile(r'^Error\:\s+Package\:\s+(.+)\s+\((.*)\)$')
+re_requires = re.compile(r'^Requires\:(.*)$')
+re_available = re.compile(r'Available:\s+(.*)$')
+re_available_version = re.compile(r'^(.*)\s+[<>=]+\s+(.*)$')
+pkg = None
+pkgs = []
+for line in sys.stdin:
+    line = line.strip()
+    m = re_error_package.match(line)
+    if m:
+        if pkg:
+            pkgs.append(pkg)
+        keys = ('name', 'version', 'release', 'epoch', 'arch')
+        pkg = {
+            'package': dict(zip(keys, splitFilename(m.group(1)))),
+            'requires': {},
+            'available': {}
+        }
+        continue
+    if pkg is None:
+        continue
+    m = re_requires.match(line)
+    if m:
+        a = re.split('\s+[<>=]+\s+', m.group(1) + ' = ')
+        pkg['requires'] = {
+            'name': a[0].strip(),
+            'version': a[1].strip()
+        }
+        continue
+    m = re_available_version.match(line)
+    if m:
+        pkg['available'].setdefault(m.group(1).strip(), []).append(m.group(2).strip())
+        continue
+
+ofile = open(sys.argv[1], 'a')
+for item in pkgs:
+#    print item
+    name = item['package']['name']
+    req_name = item['requires']['name']
+    req_version = item['requires']['version']
+    if req_version not in item['available'].get(req_name, []):
+        ofile.write('{} {}\n'.format(req_name, name))
+ofile.close()
+EOF
+
+  if [[ ! -f ${pkgs}.list ]]; then
+    chroot_cmd repoquery --all --qf="%{name}.%{arch}" ${repos} > ${pkgs}.list
+  fi
+
+  apply_blacklist ${pkgs}.list devel name_arch
+
+  # Find unsatisfied dependencies
+  sort -u -o ${pkgs}.list ${pkgs}.list
+  awk '{if(c++ < 100){s=s " " $0}else{print s;c=0;s=""}};END{print s}' \
+    ${pkgs}.list > ${pkgs}.chunks
+
+  if [[ -f ${pkgs}.deplist ]]; then
+    rm -f ${pkgs}.deplist
+  fi
+  while read line; do
+#    chroot_cmd yum --assumeno ${repos} install ${line} 2>&1 \
+#      | awk -f ${deplist_parser} -v ofile=${pkgs}.deplist
+    chroot_cmd yum --assumeno ${repos} install ${line} 2>&1 \
+      | python ${python_parser} ${pkgs}.deplist
+  done < ${pkgs}.chunks
+
+  if [[ ! -f "${pkgs}.deplist" ]]; then
+    RETVAL=${pkgs}
+    return
+  fi
+
+  sort -u -o ${pkgs}.deplist ${pkgs}.deplist
+
+  cat ${pkgs}.deplist | awk '{print $2}' > ${pkgs}.broken
+  sort -u -o ${pkgs}.broken ${pkgs}.broken
+  >${pkgs}.update
+  while read name; do
+    chroot_cmd repoquery --qf '%{nevra} %{repoid}' --show-duplicates ${name} > ${pkgs}.1
+#    cat ${pkgs}.1
+    >${pkgs}.1.mos
+    >${pkgs}.1.centos
+    awk -v ofile=${pkgs}.1 -f ${get_latest_packages} ${pkgs}.1
+    latest=$(cat ${pkgs}.1.mos ${pkgs}.1.centos | rpmdev-sort | tail -n 1)
+    if ! grep -q -E "^${latest}$" ${pkgs}.1.mos ; then
+      echo "${name}" >> ${pkgs}.update
+    fi
+  done < ${pkgs}.broken
+
+  if [[ $(cat ${pkgs}.update | wc -l) -gt 0 ]]; then
+    cat ${pkgs}.update > ${pkgs}.deplist
+  fi
+
+  echo ''
+  echo ''
+  resolve_names ${pkgs}.deplist
+  apply_blacklist ${RETVAL}.deplist devel name_arch
+#  cat ${pkgs}.deplist
+
+  >${pkgs}
+  local f1 f2 f3
+  while read f1 f2 f3; do
+    echo " * ${f3} --> ${f1} (${f2})"
+    echo ${f1} >> ${pkgs}
+    echo ${f3} >> ${pkgs}.broken
+  done < ${RETVAL}.deplist
+  unset RETVAL
+
+  sort -u -o ${pkgs} ${pkgs}
+  if [ -f ${pkgs}.broken ]; then
+    sort -u -o ${pkgs}.broken ${pkgs}.broken
+  fi
+
+#  cat ${pkgs}
+
+  if [[ $(cat ${pkgs} | wc -l) -gt 0 ]]; then
+    RETVAL=${pkgs}
+    return 1
+  fi
+
+#  rm -f ${pkgs} ||:
+#  rm -f ${pkgs}.list ||:
+#  rm -f ${pkgs}.missed ||:
+#  rm -f ${pkgs}.broken ||:
+}
+
+
 mount_iso(){
   local iso=$1
 
@@ -499,29 +691,30 @@ mount_iso(){
 
   echo "=== Mounting ISO '${iso}' ==="
 
-  local iso_mountpoint=$(mount | sed -rn "s|^(.*${iso}) on (.+) type .+$|\2|p")
-  if [ -z "${iso_mountpoint}" ]; then
+  local mountpoint_path=$(mount | sed -rn "s|^(.*${iso}) on (.+) type .+$|\2|p")
+  local mountpoint_chroot='/mnt/iso'
+  if [ -z "${mountpoint_path}" ]; then
     echo "ISO ${iso} is not mounted"
-    iso_mountpoint=${BUILDDIR}/mos-iso
-    mkdir -p ${iso_mountpoint}
+    mountpoint_path=${BUILDDIR}${mountpoint_chroot}
+    sudo mkdir -p ${mountpoint_path}
     if [[ -f ${iso} ]]; then
-      sudo mount ${iso} ${iso_mountpoint}
+      sudo mount ${iso} ${mountpoint_path}
     else
       die "${iso} not found"
     fi
   fi
 
-  cat << EOF > ${BUILDDIR}/yum.conf.d/yum.repos.d/mos-iso.repo
+  cat << EOF | sudo tee ${BUILDDIR}/etc/yum.repos.d/mos-iso.repo
 [mos-iso]
 name=MOS ISO
-baseurl=file://${iso_mountpoint}
+baseurl=file://${mountpoint_chroot}
 enabled=1
 gpgcheck=0
 EOF
-  echo "ISO mounted at '${iso_mountpoint}'"
+  echo "ISO mounted at '${mountpoint_path}'"
   echo ''
 
-  RETVAL=${iso_mountpoint}
+  RETVAL=${mountpoint_path}
 }
 
 # ==============================
@@ -647,19 +840,22 @@ else
 fi
 
 
-mkdir -p ${BUILDDIR}/cache
 if [[ ! -d ${CONFIG_DIR}/${RELEASE}/yum.conf.d ]]; then
   die "Yum config template '${CONFIG_DIR}/${RELEASE}/yum.conf.d' not found"
 fi
 
-cp -r ${CONFIG_DIR}/${RELEASE}/yum.conf.d ${BUILDDIR}/
-cat << EOF >> ${BUILDDIR}/yum.conf.d/yum.conf
-cachedir=${BUILDDIR}/cache
-reposdir=${BUILDDIR}/yum.conf.d/yum.repos.d
+mkdir -p ${BUILDDIR}/tmp
+cp -r ${CONFIG_DIR}/${RELEASE}/yum.conf.d ${BUILDDIR}/tmp/
+cat << EOF >> ${BUILDDIR}/tmp/yum.conf.d/yum.conf
+cachedir=${BUILDDIR}/tmp/cache
+reposdir=${BUILDDIR}/tmp/yum.conf.d/yum.repos.d
 EOF
 
-find ${BUILDDIR}/yum.conf.d/yum.repos.d -name '*.repo' -type f \
+find ${BUILDDIR}/tmp/yum.conf.d/yum.repos.d -name '*.repo' -type f \
   | xargs -I {} sed -i -r -f ${yum_vars_sed} {}
+
+chroot_setup
+sudo cp ${BUILDDIR}/tmp/yum.conf.d/yum.repos.d/mos.repo ${BUILDDIR}/etc/yum.repos.d/
 
 if [[ -n "${iso}" ]]; then
   mount_iso ${iso}
@@ -667,21 +863,23 @@ fi
 
 
 echo "=== Updating yum metadata ==="
-CMDPREFIX='sudo' _yum makecache
+chroot_cmd yum makecache
+#CMDPREFIX='sudo' _yum makecache
 echo ''
 
 
 echo "=== List available yum repositories ==="
-_yum repolist
+#_yum repolist
+chroot_cmd yum repolist
 echo ''
 
 
 echo "=== Creating rpm repository ==="
-echo "Repo path: ${BUILDDIR}/local.repo.d"
-mkdir -p ${BUILDDIR}/local.repo.d/Packages
+echo "Repo path: ${BUILDDIR}/tmp/local.repo.d"
+mkdir -p ${BUILDDIR}/tmp/local.repo.d/Packages
 if $append && [ -f ${out_file} ]; then
   echo "Unpacking '${out_file}' to append packages later"
-  tar -xzvf ${out_file} -C ${BUILDDIR}/local.repo.d
+  tar -xzvf ${out_file} -C ${BUILDDIR}/tmp/local.repo.d
 fi
 echo "Done"
 echo ''
@@ -710,14 +908,53 @@ fi
 download_packages ${RETVAL}
 rebuild_local_repo
 
+#repo_broken=1
+#pkgs_broken=0
+#while [[ ${repo_broken} -gt 0 ]]; do
+#  if [[ ${repo_broken} -gt 5 ]]; then
+#    die "Failed to get repositories consistent in 5 iterations"
+#  fi
+#  echo '=== Running full repository verification ==='
+#  if verify_repo_integrity ${repolist}; then
+#    echo 'Looks good'
+#    repo_broken=0
+#  else
+#    pkgs_broken=1
+#  fi
+#  echo ''
+#  while [[ ${pkgs_broken} -gt 0 ]]; do
+#    if [[ ${pkgs_broken} -gt 5 ]]; then
+#      die "Failed to download missed dependencies in 5 iterations"
+#    fi
+#    # Assign RETVAL to pkgs as I need it later to verify broken packages
+#    pkgs=${RETVAL}
+#    #resolve_names ${pkgs}
+#    if ${resolve_srpm}; then
+#      resolve_srpm_packages ${RETVAL}
+#      apply_blacklist ${RETVAL} devel name_arch
+#      merge_lists ${RETVAL} ${RETVAL}.in
+#    fi
+#    download_packages ${RETVAL}
+#    rebuild_local_repo
+#    echo "=== Checking packages ==="
+#    if verify_repo_integrity -l ${pkgs}.broken ${repolist}; then
+#      echo 'Looks good'
+#      pkgs_broken=0
+#    else
+#      ((pkgs_broken++))
+#    fi
+#    echo ''
+#  done
+#done
+
 repo_broken=1
 pkgs_broken=0
 while [[ ${repo_broken} -gt 0 ]]; do
   if [[ ${repo_broken} -gt 5 ]]; then
     die "Failed to get repositories consistent in 5 iterations"
   fi
-  echo '=== Running full repository verification ==='
-  if verify_repo_integrity ${repolist}; then
+  echo '=== Running install_test verification ==='
+  if install_test ${repolist}; then
     echo 'Looks good'
     repo_broken=0
   else
@@ -739,7 +976,7 @@ while [[ ${repo_broken} -gt 0 ]]; do
     download_packages ${RETVAL}
     rebuild_local_repo
     echo "=== Checking packages ==="
-    if verify_repo_integrity -l ${pkgs}.broken ${repolist}; then
+    if install_test -l ${pkgs}.broken ${repolist}; then
       echo 'Looks good'
       pkgs_broken=0
     else
@@ -749,8 +986,9 @@ while [[ ${repo_broken} -gt 0 ]]; do
   done
 done
 
+
 echo '=== Compressing repository ==='
-pushd ${BUILDDIR}/local.repo.d
+pushd ${BUILDDIR}/tmp/local.repo.d
 tar -czvf ${out_file} .
 count=$(find Packages -name '*.rpm' | wc -l)
 popd
