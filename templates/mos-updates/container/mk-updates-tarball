@@ -80,7 +80,7 @@ chroot_setup() {
   sudo yum --installroot=${BUILDDIR} \
     --config=${BUILDDIR}/tmp/yum.conf.d/yum.conf \
     --nogpgcheck \
-    install -y centos-release yum yum-utils
+    install -y yum yum-utils
   sudo mount --bind /proc ${BUILDDIR}/proc
   sudo mount --bind /dev ${BUILDDIR}/dev
   sudo cp /etc/resolv.conf ${BUILDDIR}/etc/resolv.conf
@@ -844,32 +844,40 @@ if [[ ! -d ${CONFIG_DIR}/${RELEASE}/yum.conf.d ]]; then
   die "Yum config template '${CONFIG_DIR}/${RELEASE}/yum.conf.d' not found"
 fi
 
-mkdir -p ${BUILDDIR}/tmp
-cp -r ${CONFIG_DIR}/${RELEASE}/yum.conf.d ${BUILDDIR}/tmp/
+
+mkdir -p ${BUILDDIR}/tmp/yum.conf.d/yum.repos.d
+mkdir -p ${BUILDDIR}/etc/yum.repos.d
+
+cp ${CONFIG_DIR}/${RELEASE}/yum.conf.d/yum.conf ${BUILDDIR}/tmp/yum.conf.d/
 cat << EOF >> ${BUILDDIR}/tmp/yum.conf.d/yum.conf
 cachedir=${BUILDDIR}/tmp/cache
 reposdir=${BUILDDIR}/tmp/yum.conf.d/yum.repos.d
 EOF
 
-find ${BUILDDIR}/tmp/yum.conf.d/yum.repos.d -name '*.repo' -type f \
-  | xargs -I {} sed -i -r -f ${yum_vars_sed} {}
-
-chroot_setup
-sudo cp ${BUILDDIR}/tmp/yum.conf.d/yum.repos.d/mos.repo ${BUILDDIR}/etc/yum.repos.d/
-
 if [[ -n "${iso}" ]]; then
   mount_iso ${iso}
+
+  cat << EOF > ${BUILDDIR}/tmp/yum.conf.d/yum.repos.d/mos-iso.repo
+[mos-iso]
+name=MOS ISO
+baseurl=file://${BUILDDIR}/mnt/iso
+enabled=1
+gpgcheck=0
+EOF
 fi
 
+chroot_setup
 
-echo "=== Updating yum metadata ==="
+
+echo "=== Updating from MOS repos  ==="
+sudo cp ${CONFIG_DIR}/${RELEASE}/yum.conf.d/yum.repos.d/mos.repo ${BUILDDIR}/etc/yum.repos.d/
+chroot_cmd yum update -y
+chroot_cmd yum install -y centos-release
 chroot_cmd yum makecache
-#CMDPREFIX='sudo' _yum makecache
 echo ''
 
 
 echo "=== List available yum repositories ==="
-#_yum repolist
 chroot_cmd yum repolist
 echo ''
 
@@ -908,14 +916,15 @@ fi
 download_packages ${RETVAL}
 rebuild_local_repo
 
+
 #repo_broken=1
 #pkgs_broken=0
 #while [[ ${repo_broken} -gt 0 ]]; do
 #  if [[ ${repo_broken} -gt 5 ]]; then
 #    die "Failed to get repositories consistent in 5 iterations"
 #  fi
-#  echo '=== Running full repository verification ==='
-#  if verify_repo_integrity ${repolist}; then
+#  echo '=== Running install_test verification ==='
+#  if install_test ${repolist}; then
 #    echo 'Looks good'
 #    repo_broken=0
 #  else
@@ -937,7 +946,7 @@ rebuild_local_repo
 #    download_packages ${RETVAL}
 #    rebuild_local_repo
 #    echo "=== Checking packages ==="
-#    if verify_repo_integrity -l ${pkgs}.broken ${repolist}; then
+#    if install_test -l ${pkgs}.broken ${repolist}; then
 #      echo 'Looks good'
 #      pkgs_broken=0
 #    else
@@ -947,14 +956,15 @@ rebuild_local_repo
 #  done
 #done
 
+
 repo_broken=1
 pkgs_broken=0
 while [[ ${repo_broken} -gt 0 ]]; do
   if [[ ${repo_broken} -gt 5 ]]; then
     die "Failed to get repositories consistent in 5 iterations"
   fi
-  echo '=== Running install_test verification ==='
-  if install_test ${repolist}; then
+  echo '=== Running full repository verification ==='
+  if verify_repo_integrity ${repolist}; then
     echo 'Looks good'
     repo_broken=0
   else
@@ -976,7 +986,7 @@ while [[ ${repo_broken} -gt 0 ]]; do
     download_packages ${RETVAL}
     rebuild_local_repo
     echo "=== Checking packages ==="
-    if install_test -l ${pkgs}.broken ${repolist}; then
+    if verify_repo_integrity -l ${pkgs}.broken ${repolist}; then
       echo 'Looks good'
       pkgs_broken=0
     else
