@@ -253,8 +253,6 @@ enabled=1
 gpgcheck=0
 EOF
 
-#  CMDPREFIX='sudo' _yum makecache #2>&1 > /dev/null
-#  _yum repolist
   chroot_cmd yum makecache
   echo 'Done'
   echo ''
@@ -320,7 +318,7 @@ resolve_names() {
           --qf '%{nevra}' --whatprovides ${name} > ${pkgs}.1
         sed -r -i '/^[[:blank:]]*$/d' ${pkgs}.1
       fi
-  
+
       local result=$(cat ${pkgs}.1 | rpmdev-sort | tail -1)
     fi
 
@@ -328,7 +326,7 @@ resolve_names() {
     while read s; do
       echo "  - ${s}"
     done < ${pkgs}.1
-  
+
     echo "  ** ${result}"
     echo "${result}" >> ${pkgs}
     echo "${result} ${line}" >> ${pkgs}.deplist
@@ -416,6 +414,11 @@ download_packages() {
 
 
 verify_repo_integrity() {
+  deplist_test "$@"
+}
+
+
+deplist_test() {
   unset RETVAL
 
   local deplist_parser=$(mktemp)
@@ -504,11 +507,6 @@ EOF
     RETVAL=${pkgs}
     return 1
   fi
-
-#  rm -f ${pkgs} ||:
-#  rm -f ${pkgs}.list ||:
-#  rm -f ${pkgs}.missed ||:
-#  rm -f ${pkgs}.broken ||:
 }
 
 
@@ -614,8 +612,6 @@ EOF
     rm -f ${pkgs}.deplist
   fi
   while read line; do
-#    chroot_cmd yum --assumeno ${repos} install ${line} 2>&1 \
-#      | awk -f ${deplist_parser} -v ofile=${pkgs}.deplist
     chroot_cmd yum --assumeno ${repos} install ${line} 2>&1 \
       | python ${python_parser} ${pkgs}.deplist
   done < ${pkgs}.chunks
@@ -632,7 +628,6 @@ EOF
   >${pkgs}.update
   while read name; do
     chroot_cmd repoquery --qf '%{nevra} %{repoid}' --show-duplicates ${name} > ${pkgs}.1
-#    cat ${pkgs}.1
     >${pkgs}.1.mos
     >${pkgs}.1.centos
     awk -v ofile=${pkgs}.1 -f ${get_latest_packages} ${pkgs}.1
@@ -650,7 +645,6 @@ EOF
   echo ''
   resolve_names ${pkgs}.deplist
   apply_blacklist ${RETVAL}.deplist devel name_arch
-#  cat ${pkgs}.deplist
 
   >${pkgs}
   local f1 f2 f3
@@ -666,17 +660,10 @@ EOF
     sort -u -o ${pkgs}.broken ${pkgs}.broken
   fi
 
-#  cat ${pkgs}
-
   if [[ $(cat ${pkgs} | wc -l) -gt 0 ]]; then
     RETVAL=${pkgs}
     return 1
   fi
-
-#  rm -f ${pkgs} ||:
-#  rm -f ${pkgs}.list ||:
-#  rm -f ${pkgs}.missed ||:
-#  rm -f ${pkgs}.broken ||:
 }
 
 
@@ -917,53 +904,13 @@ download_packages ${RETVAL}
 rebuild_local_repo
 
 
-#repo_broken=1
-#pkgs_broken=0
-#while [[ ${repo_broken} -gt 0 ]]; do
-#  if [[ ${repo_broken} -gt 5 ]]; then
-#    die "Failed to get repositories consistent in 5 iterations"
-#  fi
-#  echo '=== Running install_test verification ==='
-#  if install_test ${repolist}; then
-#    echo 'Looks good'
-#    repo_broken=0
-#  else
-#    pkgs_broken=1
-#  fi
-#  echo ''
-#  while [[ ${pkgs_broken} -gt 0 ]]; do
-#    if [[ ${pkgs_broken} -gt 5 ]]; then
-#      die "Failed to download missed dependencies in 5 iterations"
-#    fi
-#    # Assign RETVAL to pkgs as I need it later to verify broken packages
-#    pkgs=${RETVAL}
-#    #resolve_names ${pkgs}
-#    if ${resolve_srpm}; then
-#      resolve_srpm_packages ${RETVAL}
-#      apply_blacklist ${RETVAL} devel name_arch
-#      merge_lists ${RETVAL} ${RETVAL}.in
-#    fi
-#    download_packages ${RETVAL}
-#    rebuild_local_repo
-#    echo "=== Checking packages ==="
-#    if install_test -l ${pkgs}.broken ${repolist}; then
-#      echo 'Looks good'
-#      pkgs_broken=0
-#    else
-#      ((pkgs_broken++))
-#    fi
-#    echo ''
-#  done
-#done
-
-
 repo_broken=1
 pkgs_broken=0
 while [[ ${repo_broken} -gt 0 ]]; do
   if [[ ${repo_broken} -gt 5 ]]; then
     die "Failed to get repositories consistent in 5 iterations"
   fi
-  echo '=== Running full repository verification ==='
+  echo '=== Running repository verification test ==='
   if verify_repo_integrity ${repolist}; then
     echo 'Looks good'
     repo_broken=0
@@ -1009,3 +956,4 @@ echo ''
 if [[ -f ${logfile} ]]; then
   mv ${logfile} ${out_file}.log.txt
 fi
+
