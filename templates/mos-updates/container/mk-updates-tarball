@@ -722,6 +722,8 @@ BLACKLIST=$(mktemp)
 CONFIG_DIR=/container/config
 mode_auto=false
 
+declare -A EXTRA_REPO
+
 
 while [[ -n "$1" ]]; do
   case "$1" in
@@ -738,6 +740,10 @@ while [[ -n "$1" ]]; do
     -B|--blacklist-replace)
       blacklist_replace="$2"
       shift
+    ;;
+    -e|--extra-repo)
+      EXTRA_REPO[${2}]=${3}
+      shift 2
     ;;
     -o|--out-file)
       out_file=$2
@@ -857,6 +863,19 @@ chroot_setup
 
 
 echo "=== Updating from MOS repos  ==="
+>/tmp/extra.repo
+for repoid in "${!EXTRA_REPO[@]}"; do
+  cat << EOF >> /tmp/extra.repo
+[mos-extra-${repoid}]
+name=MOS Extra ${repoid}
+baseurl=${EXTRA_REPO[${repoid}]}
+enabled=1
+gpgcheck=0
+
+EOF
+done
+
+sudp cp /tmp/extra.repo ${BUILDDIR}/etc/yum.repos.d/
 sudo cp ${CONFIG_DIR}/${RELEASE}/yum.conf.d/yum.repos.d/mos.repo ${BUILDDIR}/etc/yum.repos.d/
 chroot_cmd yum update -y
 chroot_cmd yum install -y centos-release
